@@ -37,6 +37,17 @@ impl Environment {
     }
 }
 
+/// Where session state is persisted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStore {
+    /// PostgreSQL, shared across instances and surviving a restart.
+    Postgres,
+    /// In-process memory. Development only: sessions are lost on restart and
+    /// are not shared between replicas.
+    Memory,
+}
+
 /// A configuration value that must never be logged or rendered.
 ///
 /// `Debug` is redacted, so a secret cannot leak through `tracing` output or a
@@ -95,6 +106,8 @@ pub struct AppConfig {
     pub database_url: Secret,
     /// Key used to sign session cookies; at least 64 bytes.
     pub session_secret: Secret,
+    /// Where sessions are stored. Default: `postgres`.
+    pub session_store: SessionStore,
 
     /// Entra ID directory (tenant) ID.
     pub azure_tenant_id: String,
@@ -153,6 +166,7 @@ impl AppConfig {
             .merge(Serialized::default("rate_limit_per_hour", 20_u32))
             .merge(Serialized::default("retention_days", 90_u32))
             .merge(Serialized::default("azure_storage_container", "media"))
+            .merge(Serialized::default("session_store", "postgres"))
             .merge(Env::raw())
             .extract()
             .map_err(Box::new)?;
@@ -193,7 +207,34 @@ impl AppConfig {
                     .to_owned(),
             ));
         }
+        if self.app_env.is_production() && self.session_store == SessionStore::Memory {
+            return Err(ConfigError::Invalid(
+                "SESSION_STORE=memory is not allowed in production; sessions would be lost on \
+                 restart and unshared between replicas"
+                    .to_owned(),
+            ));
+        }
+        if !self.oidc_redirect_uri.starts_with(&self.app_base_url) {
+            return Err(ConfigError::Invalid(
+                "OIDC_REDIRECT_URI must live under APP_BASE_URL".to_owned(),
+            ));
+        }
         Ok(())
+    }
+
+    /// Returns the OIDC settings for the auth crate.
+    pub fn oidc(&self) -> mediagenerator_auth::OidcConfig {
+        mediagenerator_auth::OidcConfig {
+            tenant_id: self.azure_tenant_id.clone(),
+            client_id: self.azure_client_id.clone(),
+            client_secret: self
+                .azure_client_secret
+                .as_ref()
+                .map(|secret| secret.expose().to_owned()),
+            redirect_uri: self.oidc_redirect_uri.clone(),
+            post_logout_redirect_uri: format!("{}/", self.app_base_url),
+            required_app_role: self.required_app_role.clone(),
+        }
     }
 
     /// Returns the required app role, treating an empty string as "not set".

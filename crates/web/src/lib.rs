@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod middleware;
 pub mod routes;
+pub mod session;
 pub mod state;
 pub mod telemetry;
 
@@ -18,13 +19,16 @@ use std::time::Duration;
 use axum::{
     Router,
     http::{HeaderValue, StatusCode, header},
+    middleware::{from_fn, from_fn_with_state},
 };
+use mediagenerator_auth::{require_auth, require_role};
 use tower::{ServiceBuilder, util::option_layer};
 use tower_http::{
     compression::CompressionLayer, cors::CorsLayer, limit::RequestBodyLimitLayer,
     sensitive_headers::SetSensitiveRequestHeadersLayer, services::ServeDir,
     set_header::SetResponseHeaderLayer, timeout::TimeoutLayer, trace::TraceLayer,
 };
+use tower_sessions::{SessionManagerLayer, SessionStore, service::SignedCookie};
 
 pub use config::AppConfig;
 pub use error::{AppError, AppResult};
@@ -42,13 +46,33 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long browsers may cache static assets.
 const ASSET_CACHE_CONTROL: &str = "public, max-age=3600";
 
+/// Handles any path no route matched.
+async fn not_found() -> AppError {
+    AppError::NotFound
+}
+
 /// Builds the complete application router.
 ///
-/// Layers are listed outermost first: the correlation span wraps everything so
-/// that all downstream logs carry the ID, and the static file service is
-/// mounted last so it never shadows an application route.
-pub fn build_router(state: AppState) -> Router {
+/// Routes fall into three groups:
+///
+/// * `/health`, `/ready` and `/assets/*` — reachable without a session,
+/// * `/auth/*` — necessarily unauthenticated, since they establish the session,
+/// * everything else — behind `require_auth` and, when configured,
+///   `require_role`.
+///
+/// Layers are listed innermost first. The session layer wraps all three groups,
+/// because `/auth/login` needs to write to a session before anyone is signed in,
+/// and the correlation span wraps everything so that all logs carry the ID.
+pub fn build_router<Store>(
+    state: AppState,
+    session_layer: SessionManagerLayer<Store, SignedCookie>,
+) -> Router
+where
+    Store: SessionStore + Clone + 'static,
+{
     let environment = state.config.app_env;
+    let origin = middleware::csrf::Origin::from_base_url(&state.config.app_base_url);
+
     // Cache-Control is attached to the static file service only; API and HTML
     // responses must not inherit it.
     let assets = ServiceBuilder::new()
@@ -62,9 +86,23 @@ pub fn build_router(state: AppState) -> Router {
                 .append_index_html_on_directories(false),
         );
 
+    // `require_auth` is applied last, so it is the outermost of the two and
+    // runs first: `require_role` can then rely on the user being present.
+    let protected = routes::me::router()
+        .layer(from_fn_with_state(state.role_policy.clone(), require_role))
+        .layer(from_fn(require_auth));
+
     Router::new()
         .merge(routes::health::router())
+        .merge(routes::auth::router())
+        .merge(protected)
         .nest_service("/assets", assets)
+        // Set outside the guarded router: without this, the guards would also
+        // wrap the default fallback and an unknown path would bounce an
+        // anonymous visitor through sign-in instead of simply not existing.
+        .fallback(not_found)
+        .layer(session_layer)
+        .layer(from_fn_with_state(origin, middleware::csrf::verify_origin))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
             REQUEST_TIMEOUT,
@@ -86,8 +124,6 @@ pub fn build_router(state: AppState) -> Router {
             header::AUTHORIZATION,
             header::COOKIE,
         ]))
-        .layer(axum::middleware::from_fn(
-            middleware::correlation::propagate,
-        ))
+        .layer(from_fn(middleware::correlation::propagate))
         .with_state(state)
 }

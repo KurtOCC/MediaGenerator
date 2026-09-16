@@ -6,7 +6,7 @@ en prompt. Genereringen skjer mot Microsoft Azure AI Foundry / Azure OpenAI.
 
 Hele applikasjonen er skrevet i Rust.
 
-> **Status:** Fase 1 av 6 er ferdig. Se [Leveranseplan](#leveranseplan).
+> **Status:** Fase 2 av 6 er ferdig. Se [Leveranseplan](#leveranseplan).
 
 ---
 
@@ -116,6 +116,41 @@ curl -i http://localhost:8080/health
 curl -i http://localhost:8080/ready
 ```
 
+Åpne deretter <http://localhost:8080> i en nettleser. Du blir sendt til Entra ID,
+og etter innlogging tilbake til forsiden.
+
+### Uten PostgreSQL lokalt
+
+Sett `SESSION_STORE=memory` i `.env`. Da kjører sesjonene i minnet og du trenger
+ingen database for å teste innlogging. Verdien avvises når `APP_ENV=production`.
+
+## Innlogging
+
+Autentiseringen er OpenID Connect Authorization Code Flow med PKCE mot Entra ID.
+
+| Rute | Beskrivelse |
+| --- | --- |
+| `GET /auth/login` | Starter innloggingen. `?return_to=/sti` tas vare på |
+| `GET /auth/callback` | Tar imot omdirigeringen fra Entra ID |
+| `POST /auth/logout` | Tømmer sesjonen og avslutter den hos Entra ID |
+
+Alt hemmelig — PKCE-verifier, `state`, `nonce` og ID-tokenet — ligger
+server-side i sesjonen. Nettleseren holder bare en signert cookie med en
+ugjennomsiktig sesjons-ID.
+
+Det som valideres på ID-tokenet: signatur mot JWKS (hentet via discovery og
+cachet i 12 timer), issuer, audience, nonce, `exp`, og `at_hash` mot access
+token. Sesjons-ID-en byttes ut etter innlogging, så en sesjon en angriper har
+plantet på forhånd ikke kan brukes etterpå.
+
+`require_auth` beskytter alt utenom `/health`, `/ready`, `/assets/*` og
+`/auth/*`. Avvisninger tilpasses kallet: JSON på `/api/*`, `HX-Redirect` på
+HTMX-kall, og vanlig omdirigering ved sidenavigasjon.
+
+`require_role` er på når `REQUIRED_APP_ROLE` har en verdi, og av når den er tom.
+Rollen godtas både som app-rolle og som gruppemedlemskap, slik at tilgang kan
+styres på begge måter uten kodeendring.
+
 ---
 
 ## Miljøvariabler
@@ -131,6 +166,7 @@ Alle innstillinger leses fra miljøet. Se [.env.example](.env.example) for malen
 | `ASSETS_DIR` | nei | `assets` | Katalog som serveres på `/assets` |
 | `DATABASE_URL` | ja | – | PostgreSQL connection string |
 | `SESSION_SECRET` | ja | – | Nøkkel for cookie-signering, minst 64 tegn |
+| `SESSION_STORE` | nei | `postgres` | `postgres` eller `memory`; `memory` avvises i produksjon |
 | `AZURE_TENANT_ID` | ja | – | Entra ID tenant |
 | `AZURE_CLIENT_ID` | ja | – | Entra ID app (client) ID |
 | `AZURE_CLIENT_SECRET` | nei | – | Utelates ved Managed Identity |
@@ -149,9 +185,10 @@ Alle innstillinger leses fra miljøet. Se [.env.example](.env.example) for malen
 | `RATE_LIMIT_PER_HOUR` | nei | `20` | Genereringer per bruker per time |
 | `RETENTION_DAYS` | nei | `90` | Oppbevaringstid for prompts og media |
 
-`APP_ENV` og `ASSETS_DIR` er tillegg til listen i spesifikasjonen; begge er
-nødvendige for henholdsvis JSON-logging/HSTS og for at Docker-imaget skal finne
-statiske filer uavhengig av arbeidskatalog.
+`APP_ENV`, `ASSETS_DIR` og `SESSION_STORE` er tillegg til listen i
+spesifikasjonen. De dekker henholdsvis JSON-logging/HSTS, at Docker-imaget skal
+finne statiske filer uavhengig av arbeidskatalog, og lokal utvikling uten
+PostgreSQL.
 
 ---
 
@@ -280,6 +317,31 @@ ubegrenset data i loggstrømmen.
 **CORS er tomt.** UI-et serveres fra samme origin som API-et, så ingen
 cross-origin-kaller skal tillates.
 
+**Ukjente stier gir 404, ikke omdirigering til innlogging.** Fallback-ruten er
+satt utenfor `require_auth`. Ellers ville en feilskrevet URL sendt en anonym
+besøkende gjennom hele innloggingsløpet for så å ende på 404.
+
+**`SameSite=Lax`, ikke `Strict`, på sesjonscookien.** Entra ID sender brukeren
+tilbake til `/auth/callback` som en top-level GET fra et annet nettsted.
+Med `Strict` ville nettleseren holdt cookien tilbake på akkurat den
+navigasjonen, og innloggingsløpet ville gått tapt.
+
+**`tower-sessions` er låst til 0.14-linja.** `tower-sessions-sqlx-store` 0.15
+er bygget mot `tower-sessions-core` 0.14, mens `tower-sessions` 0.15 bruker core
+0.15. De to `SessionStore`-traitene er ikke samme trait, så PostgreSQL-storen
+kan ikke kobles på 0.15. Oppgraderes når sqlx-storen følger etter.
+
+**`reqwest` er pinnet til 0.12.** `openidconnect` 4.0.1 er bygget mot den, og
+0.13 ville gitt to inkompatible `reqwest::Client`-typer i samme prosess.
+TLS-backend er rustls; `native-tls` finnes ikke i avhengighetstreet.
+
+**`state` sammenlignes i konstant tid.** En kortsluttende `==` ville lekket hvor
+mange tegn som stemte, til en angriper som måler responstid.
+
+**ID-tokenet lagres i sesjonen.** Det brukes som `id_token_hint` ved utlogging,
+slik at Entra ID avslutter riktig sesjon uten å vise kontovelger. Det ligger
+utelukkende server-side.
+
 ---
 
 ## Leveranseplan
@@ -287,7 +349,7 @@ cross-origin-kaller skal tillates.
 | Fase | Innhold | Status |
 | --- | --- | --- |
 | 1 | Workspace, axum-server med `/health`, tracing, config, Dockerfile | Ferdig |
-| 2 | Entra ID OIDC-innlogging, sesjon, `require_auth`, `/auth`-ruter | Gjenstår |
+| 2 | Entra ID OIDC-innlogging, sesjon, `require_auth`, `/auth`-ruter | Ferdig |
 | 3 | Statisk UI med Tailwind og HTMX, mock-generering | Gjenstår |
 | 4 | Domenemodell, migrasjoner, sqlx-repository, jobbkø, SSE | Gjenstår |
 | 5 | Azure-providers for bilde, lyd og video + Blob Storage og SAS | Gjenstår |

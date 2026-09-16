@@ -21,8 +21,12 @@ pub mod nb {
     pub const NAV_MY_HISTORY: &str = "Min historikk";
     /// User menu: sign out.
     pub const NAV_LOGOUT: &str = "Logg ut";
+    /// Sign in with the corporate identity provider.
+    pub const NAV_LOGIN: &str = "Logg inn med Oslofjord-konto";
     /// Accessible label for the user menu trigger.
     pub const NAV_USER_MENU_LABEL: &str = "Åpne brukermeny";
+    /// Fallback display name when the ID token carried no usable name.
+    pub const UNKNOWN_USER: &str = "Ukjent bruker";
 
     // ----- Hero -----------------------------------------------------------
     /// Small uppercase eyebrow above the headline.
@@ -102,6 +106,8 @@ pub mod nb {
         "AI-tjenesten svarer ikke akkurat nå. Prøv igjen om noen minutter.";
     /// Shown when the CSRF token is missing or does not match.
     pub const ERR_CSRF: &str = "Sikkerhetssjekken feilet. Last siden på nytt og prøv igjen.";
+    /// Shown when the sign-in flow failed for any reason we will not detail.
+    pub const ERR_LOGIN_FAILED: &str = "Innloggingen feilet. Prøv å logge inn på nytt.";
     /// Shown when the prompt is empty.
     pub const ERR_PROMPT_EMPTY: &str = "Du må beskrive hva du vil lage.";
     /// Shown when the prompt contains disallowed control characters.

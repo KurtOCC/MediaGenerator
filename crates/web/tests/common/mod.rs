@@ -1,20 +1,23 @@
-//! Shared helpers for the web crate's end-to-end tests.
+//! Shared helpers for the web crate end-to-end tests.
 //!
 //! Each integration test binary compiles this module separately, so items used
 //! by only one of them would otherwise be reported as dead code.
 
 #![allow(dead_code)]
 
+use axum::Router;
 use mediagenerator_web::{
-    AppConfig, AppState,
-    config::{Environment, Secret},
+    AppConfig, AppState, build_router,
+    config::{Environment, Secret, SessionStore},
+    session::session_layer,
 };
+use tower_sessions::MemoryStore;
 
 /// Builds a configuration that is valid but points at nothing real.
 ///
-/// Phase 1 exercises only routes that never touch Azure or the database, so
-/// placeholder endpoints are sufficient; later phases replace the relevant
-/// fields with test doubles.
+/// The Entra ID and Azure endpoints are placeholders: no test in this phase
+/// reaches the network, because every test either stops at a guard or at a
+/// probe endpoint.
 pub fn test_config() -> AppConfig {
     AppConfig {
         app_base_url: "http://localhost:8080".to_owned(),
@@ -24,6 +27,7 @@ pub fn test_config() -> AppConfig {
         assets_dir: "assets".to_owned(),
         database_url: Secret::new("postgres://localhost/mediagenerator_test"),
         session_secret: Secret::new("x".repeat(64)),
+        session_store: SessionStore::Memory,
         azure_tenant_id: "00000000-0000-0000-0000-000000000000".to_owned(),
         azure_client_id: "00000000-0000-0000-0000-000000000001".to_owned(),
         azure_client_secret: None,
@@ -46,5 +50,18 @@ pub fn test_config() -> AppConfig {
 
 /// Builds application state backed by [`test_config`].
 pub fn test_state() -> AppState {
-    AppState::new(test_config())
+    AppState::new(test_config()).expect("test configuration should build valid state")
+}
+
+/// Builds the full router with an in-memory session store.
+pub fn test_router() -> Router {
+    router_with(test_config())
+}
+
+/// Builds the full router from a caller-supplied configuration.
+pub fn router_with(config: AppConfig) -> Router {
+    let layer = session_layer(&config, MemoryStore::default())
+        .expect("test session secret should be long enough");
+    let state = AppState::new(config).expect("test configuration should build valid state");
+    build_router(state, layer)
 }

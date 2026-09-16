@@ -7,12 +7,12 @@ use axum::{
     body::Body,
     http::{Request, StatusCode, header},
 };
-use mediagenerator_web::build_router;
+
 use tower::ServiceExt as _;
 
 /// Sends a `GET` through the full router and returns the response.
 async fn get(path: &str) -> axum::response::Response {
-    let router = build_router(common::test_state());
+    let router = common::test_router();
     let request = Request::builder()
         .uri(path)
         .body(Body::empty())
@@ -98,7 +98,7 @@ async fn a_correlation_id_is_generated_when_the_caller_sends_none() {
 
 #[tokio::test]
 async fn a_sane_inbound_correlation_id_is_echoed_back() {
-    let router = build_router(common::test_state());
+    let router = common::test_router();
     let request = Request::builder()
         .uri("/health")
         .header("x-correlation-id", "abc-123")
