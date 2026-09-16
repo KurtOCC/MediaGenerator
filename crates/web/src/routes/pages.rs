@@ -15,7 +15,12 @@ use mediagenerator_auth::SessionUser;
 use mediagenerator_domain::i18n::nb;
 use tower_sessions::Session;
 
-use crate::{error::AppError, middleware::csrf, render::Page, state::AppState};
+use mediagenerator_storage::jobs;
+
+use crate::{
+    error::AppError, identity::local_user_id, middleware::csrf, render::Page,
+    routes::api::JobCardTemplate, state::AppState,
+};
 
 /// Returns the page routes.
 pub fn router() -> Router<AppState> {
@@ -69,6 +74,11 @@ struct IndexTemplate {
     display_name: String,
     /// Prompt length limit, shown in the counter and enforced on submit.
     max_prompt_chars: usize,
+    /// Pre-rendered card for a job the user still has running.
+    ///
+    /// Rendered on load so that a reload or a navigation back picks the
+    /// generation up again, rather than losing sight of it.
+    active_job: Option<String>,
     /// Cards in the "Generert" grid.
     examples: Vec<Example>,
 }
@@ -93,14 +103,39 @@ async fn index(
     Extension(user): Extension<SessionUser>,
 ) -> Result<Page<IndexTemplate>, AppError> {
     let csrf_token = csrf_token(&session).await?;
+    let active_job = active_job_card(&state, &session, &user).await;
 
     Ok(Page(IndexTemplate {
         csrf_token,
         initials: user.initials(),
         display_name: user.display_name.clone(),
         max_prompt_chars: state.config.max_prompt_chars,
+        active_job,
         examples: examples(),
     }))
+}
+
+/// Renders the card for the user's most recent unfinished job, if any.
+///
+/// A failure here is swallowed on purpose: not being able to show a running
+/// job is a degraded front page, not a broken one, and the job itself is
+/// unaffected.
+async fn active_job_card(
+    state: &AppState,
+    session: &Session,
+    user: &SessionUser,
+) -> Option<String> {
+    let user_id = local_user_id(&state.db, session, user).await.ok()?;
+    let active = jobs::active_for_user(&state.db, user_id)
+        .await
+        .inspect_err(|error| tracing::error!(%error, "could not read active jobs"))
+        .ok()?;
+
+    let newest = active.first()?;
+    JobCardTemplate::from_job(newest)
+        .render()
+        .inspect_err(|error| tracing::error!(%error, "could not render the active job card"))
+        .ok()
 }
 
 /// Renders the user's own history. Filled in phase 6.
@@ -164,6 +199,7 @@ mod tests {
             initials: "HK".to_owned(),
             display_name: display_name.to_owned(),
             max_prompt_chars: 4000,
+            active_job: None,
             examples: examples(),
         }
     }

@@ -1,0 +1,87 @@
+{#
+  The card for one job, in whatever state it is in. Returned by
+  /api/generate and by /api/jobs/{id}/card, and rendered straight into the page
+  on load when the user has something still running.
+
+  `data-jobb` and `data-venter` are what the script looks for: if the job can
+  still change, it opens an event stream and replaces this card when the job
+  finishes. Everything the browser needs is in these attributes, so nothing has
+  to be remembered across a reload.
+#}
+<article
+  class="mt-5 rounded-panel border border-border bg-surface p-5 shadow-panel sm:p-6"
+  id="jobbkort"
+  data-jobb="{{ id }}"
+  {% if pending %}data-venter="true"{% endif %}
+  tabindex="-1"
+  aria-labelledby="jobbkort-tittel"
+  aria-busy="{% if pending %}true{% else %}false{% endif %}"
+>
+  <div class="flex flex-wrap items-baseline justify-between gap-2">
+    <h2 id="jobbkort-tittel" class="text-[15px] font-semibold text-text">
+      {% if pending %}{{ nb::RESULT_PENDING_HEADING }}{% else if failed %}{{ nb::RESULT_FAILED_HEADING }}{% else %}{{ nb::RESULT_HEADING }}{% endif %}
+    </h2>
+    <p class="text-xs text-text-muted">
+      {{ media_label }}{% if elapsed != "" %} &middot; {{ elapsed }}{% endif %}
+    </p>
+  </div>
+
+  <div
+    class="mt-4 flex min-h-[180px] items-center justify-center rounded-card border border-border bg-gradient-to-br from-surface-2 to-[#0d1119] p-6 text-center"
+  >
+    {% if pending %}
+      <div class="flex flex-col items-center gap-3">
+        <svg class="h-7 w-7 animate-spin text-accent-hover" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.8" opacity="0.3" />
+          <path d="M14.2 8A6.2 6.2 0 0 0 8 1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+        <p class="text-sm text-text-muted">
+          {% if status == "queued" %}{{ nb::STATUS_QUEUED }}{% else %}{{ nb::STATUS_RUNNING }}{% endif %}
+        </p>
+        <p class="max-w-sm text-xs text-text-muted">{{ nb::PENDING_SAFE_TO_LEAVE }}</p>
+      </div>
+    {% else if failed %}
+      <p class="max-w-sm text-sm text-text-muted">{{ error_message }}</p>
+    {% else if asset_url == "" %}
+      <p class="max-w-sm text-sm text-text-muted">{{ nb::RESULT_MOCK_NOTICE }}</p>
+    {% else if media_type == "audio" %}
+      <audio controls class="w-full" src="{{ asset_url }}"></audio>
+    {% else if media_type == "video" %}
+      <video controls playsinline class="max-h-[420px] w-full rounded-card" src="{{ asset_url }}"></video>
+    {% else %}
+      <img class="max-h-[420px] w-auto rounded-card" src="{{ asset_url }}" alt="{{ prompt }}" />
+    {% endif %}
+  </div>
+
+  <p class="mt-4 text-sm">
+    <span class="text-text-muted">{{ nb::RESULT_PROMPT_LABEL }}</span>
+    <span class="text-text">&laquo;{{ prompt }}&raquo;</span>
+  </p>
+
+  {% if !pending %}
+  <div class="mt-4 flex flex-wrap gap-2">
+    {% if !failed %}
+    <a
+      class="rounded-card border border-border bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:border-accent-hover aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+      href="{{ asset_url }}"
+      download
+      {% if asset_url == "" %}aria-disabled="true"{% endif %}
+    >{{ nb::DOWNLOAD }}</a>
+
+    <button
+      type="button"
+      class="kopier-lenke rounded-card border border-border bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:border-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+      data-lenke="{{ asset_url }}"
+      {% if asset_url == "" %}disabled{% endif %}
+    >{{ nb::COPY_LINK }}</button>
+    {% endif %}
+
+    <button
+      type="button"
+      class="generer-paa-nytt rounded-card border border-border bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:border-accent-hover"
+      data-prompt="{{ prompt }}"
+      data-medietype="{{ media_type }}"
+    >{{ nb::REGENERATE }}</button>
+  </div>
+  {% endif %}
+</article>

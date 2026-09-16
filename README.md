@@ -6,7 +6,7 @@ en prompt. Genereringen skjer mot Microsoft Azure AI Foundry / Azure OpenAI.
 
 Hele applikasjonen er skrevet i Rust.
 
-> **Status:** Fase 3 av 6 er ferdig. Se [Leveranseplan](#leveranseplan).
+> **Status:** Fase 4 av 6 er ferdig. Se [Leveranseplan](#leveranseplan).
 
 ---
 
@@ -17,6 +17,7 @@ Hele applikasjonen er skrevet i Rust.
 - [Kom i gang lokalt](#kom-i-gang-lokalt)
 - [Innlogging](#innlogging)
 - [Grensesnittet](#grensesnittet)
+- [Jobbmodellen](#jobbmodellen)
 - [Miljøvariabler](#miljøvariabler)
 - [Entra ID – app-registrering steg for steg](#entra-id--app-registrering-steg-for-steg)
 - [Azure-ressurser som må opprettes](#azure-ressurser-som-må-opprettes)
@@ -88,7 +89,7 @@ Avhengighetsretningen er enveis: `domain` kjenner ingen andre crates;
 - Rust stable (`rustup toolchain install stable`)
 - På Windows: Visual Studio Build Tools med «Desktop development with C++»
   (MSVC-linker og Windows SDK)
-- PostgreSQL 15+ (fra fase 4)
+- PostgreSQL 15+ – eller bruk utviklingsdatabasen i Azure, se [Azure-ressurser](#azure-ressurser-som-må-opprettes)
 - Tailwind standalone CLI – se [Bygg CSS](#bygg-css). Ingen npm.
 
 ### Oppsett
@@ -201,6 +202,55 @@ plattformen gjør det), `aria-live` på varsler, og `prefers-reduced-motion`
 respekteres. Kontrasten på dempet tekst mot bakgrunn er ca. 6,3:1 og på blå
 knapp med hvit tekst ca. 5,6:1 — begge over AA-kravet på 4,5:1.
 
+## Jobbmodellen
+
+Generering er asynkron hele veien. `POST /api/generate` validerer, skriver en rad
+og svarer med én gang; en liten arbeiderpool driver jobben videre, og nettleseren
+følger med over Server-Sent Events.
+
+```
+POST /api/generate  ->  jobs-rad (queued)  ->  kø  ->  arbeider (running)
+                                                          |
+                          SSE: /api/jobs/{id}/events  <----+
+                                                          v
+                                                    succeeded / failed
+```
+
+| Rute | Innhold |
+| --- | --- |
+| `POST /api/generate` | Oppretter jobben og svarer med kortet for `queued` |
+| `GET /api/jobs/{id}` | Status som JSON |
+| `GET /api/jobs/{id}/events` | SSE-strøm som lukkes på terminal status |
+| `GET /api/jobs/{id}/card` | Kortet som HTML-fragment |
+
+`JobStatus` er `Queued | Running | Succeeded | Failed { code, message } |
+Cancelled`. Feilkoden er stabil og lagres i `jobs.error_code`; meldingen er
+norsk og kommer fra i18n-modulen.
+
+**Du kan navigere vekk eller oppdatere siden.** Jobben ligger i databasen, ikke i
+nettleseren. Forsiden spør `active_for_user` ved hver innlasting og rendrer
+kortet for det som fortsatt kjører, og JS-en kobler seg på strømmen igjen. Ingen
+`localStorage`, ingenting å miste.
+
+**Ved omstart** feiles alt som sto igjen som `queued` eller `running`, med en
+egen melding. En rad som henger på «Genererer …» for alltid er verre enn en som
+sier at den ble avbrutt og kan prøves på nytt.
+
+**Eierskap er en `where`-betingelse**, ikke en sjekk kalleren må huske. En jobb
+som tilhører noen andre gir «finnes ikke», ikke «ingen tilgang» — at raden
+finnes er i seg selv informasjon.
+
+### Datamodell
+
+`users`, `jobs`, `assets` og `audit_log`, definert i
+[migrations/0001_initial.sql](migrations/0001_initial.sql). Migrasjonene er
+kompilert inn i binæren og kjøres ved oppstart, så container-imaget migrerer seg
+selv uten et eget artefakt å holde i takt.
+
+To databasebeskrankninger er verdt å merke seg: `jobs.status` har en
+check-constraint på de fem gyldige verdiene, og `jobs_error_matches_status`
+krever at en jobb har feilkode hvis og bare hvis den er `failed`.
+
 ---
 
 ## Miljøvariabler
@@ -288,6 +338,25 @@ Discovery-dokumentet applikasjonen leser er
 | Azure Container Apps (+ environment) | Kjøring | Systemtildelt Managed Identity |
 | Log Analytics workspace | Logger | Container Apps skriver JSON-logger hit |
 
+### Opprettet så langt
+
+Utviklingsmiljøet står i abonnementet **Oslofjord IT Drift**:
+
+| Ressurs | Verdi |
+| --- | --- |
+| Resource group | `rg-mediagenerator-dev` (norwayeast) |
+| PostgreSQL Flexible Server | `psql-mediagenerator-56mfry`, PostgreSQL 17 |
+| SKU | Burstable `Standard_B1ms`, 32 GB, 7 dagers backup |
+| Databaser | `mediagenerator`, `mediagenerator_test` |
+| Nettverk | Offentlig tilgang, brannmurregel for én IP |
+
+Anslått kostnad er i størrelsesorden 15 USD/måned. SKU-en kan skaleres opp uten
+å opprette noe på nytt.
+
+To ting må strammes inn før produksjon: serveren har offentlig endepunkt med en
+brannmurregel per IP i stedet for private endpoint, og administratorpassordet
+ligger i `.env` i stedet for i Key Vault.
+
 **Rolletildelinger til Container App-ens managed identity:**
 
 - `Cognitive Services OpenAI User` på AI Foundry-ressursen
@@ -320,6 +389,21 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
 ```
+
+### Repository-testene
+
+Testene i [crates/storage/tests/](crates/storage/tests/) kjører mot en ekte
+PostgreSQL. De hopper over seg selv når `MEDIAGENERATOR_TEST_DATABASE_URL` ikke
+er satt, slik at `cargo test` er grønn uten database — også i CI.
+
+```bash
+# Peker på en database som kan kastes. Testene migrerer den de peker på.
+export MEDIAGENERATOR_TEST_DATABASE_URL="postgres://...:5432/mediagenerator_test?sslmode=require"
+cargo test -p mediagenerator-storage
+```
+
+Dette er den eneste kontrollen av SQL-en, siden spørringene bruker runtime-API-et
+og ikke `query!`-makroene. Kjør dem når du endrer en spørring eller skjemaet.
 
 Regler som håndheves i kodebasen:
 
@@ -423,6 +507,28 @@ alltid legger på headeren. Utloggingsskjemaet er en vanlig nettleser-POST og
 dekkes av origin-sjekken og `SameSite=Lax`. Spesifikasjonen tillater
 enten-eller; her er begge på der det er praktisk mulig.
 
+**sqlx brukes med runtime-API-et, ikke `query!`-makroene.** Makroene sjekker SQL
+mot en levende database ved kompilering, som ville betydd enten en database i CI
+eller en innsjekket offline-cache som må regenereres ved hver spørringsendring.
+Byttet er bevisst: SQL-feil fanges av repository-testene, som kjører mot en ekte
+database, og `cargo build` er uavhengig av enhver server.
+
+**SSE-ruten ligger utenfor request-timeouten.** En hendelsesstrøm skal stå åpen
+så lenge jobben varer; en 30-sekunders timeout ville kuttet den hele tiden. Alle
+andre ruter har timeouten på.
+
+**Køen er en pekepinn, ikke sannheten.** Alt som betyr noe ligger i `jobs`-tabellen.
+Køen er en `mpsc`-kanal med tak på 64; når den er full feiles jobben med én gang
+i stedet for å bli liggende `queued` uten at noe kommer for å hente den.
+
+**Audit-loggen inneholder ikke prompten.** Den registrerer hvem, hva, når og
+hvorfra. Prompten ligger på jobb-raden, som er underlagt oppbevaringstiden;
+revisjonssporet skal ikke stille bli en ekstra kopi av innholdet.
+
+**`x-forwarded-for` leses, men kun til audit.** Container Apps terminerer TLS
+foran prosessen, så peer-adressen er ingressen. Headeren brukes aldri til en
+tilgangsavgjørelse, og en forfalsket verdi kan derfor ikke gi noen noe.
+
 **ID-tokenet lagres i sesjonen.** Det brukes som `id_token_hint` ved utlogging,
 slik at Entra ID avslutter riktig sesjon uten å vise kontovelger. Det ligger
 utelukkende server-side.
@@ -436,6 +542,6 @@ utelukkende server-side.
 | 1 | Workspace, axum-server med `/health`, tracing, config, Dockerfile | Ferdig |
 | 2 | Entra ID OIDC-innlogging, sesjon, `require_auth`, `/auth`-ruter | Ferdig |
 | 3 | Statisk UI med Tailwind og HTMX, mock-generering | Ferdig |
-| 4 | Domenemodell, migrasjoner, sqlx-repository, jobbkø, SSE | Gjenstår |
+| 4 | Domenemodell, migrasjoner, sqlx-repository, jobbkø, SSE | Ferdig |
 | 5 | Azure-providers for bilde, lyd og video + Blob Storage og SAS | Gjenstår |
 | 6 | Historikk, eksempelgalleri, rate limiting, audit-logg, tester | Gjenstår |

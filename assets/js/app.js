@@ -17,6 +17,7 @@ const MAKS_STANDARD = 4000;
 const TEKST = {
   kopiert: "Lenken er kopiert",
   ferdig: "Genereringen er ferdig",
+  feilet: "Genereringen feilet",
 };
 
 /**
@@ -97,20 +98,94 @@ function visVarsel(tekst) {
   }, 4000);
 }
 
+/** The open event stream, so a new job replaces the previous listener. */
+let aapenStrom = null;
+
 /**
- * Wires the buttons inside a freshly swapped result card.
+ * Follows a job until it reaches a terminal status.
+ *
+ * The job lives in the database, not in this page, so this can be started
+ * fresh on every load — including after a reload or a navigation back — and it
+ * will pick up whatever is still running.
+ *
+ * @param {string} jobbId
+ */
+function folgJobb(jobbId) {
+  aapenStrom?.close();
+
+  const strom = new EventSource(`/api/jobs/${encodeURIComponent(jobbId)}/events`);
+  aapenStrom = strom;
+
+  strom.addEventListener("status", async (hendelse) => {
+    let status;
+    try {
+      status = JSON.parse(hendelse.data).status;
+    } catch {
+      return;
+    }
+    if (status !== "succeeded" && status !== "failed" && status !== "cancelled") return;
+
+    strom.close();
+    if (aapenStrom === strom) aapenStrom = null;
+
+    await hentKort(jobbId);
+    visVarsel(status === "failed" ? TEKST.feilet : TEKST.ferdig);
+  });
+
+  strom.addEventListener("error", () => {
+    // EventSource reconnects on its own. Falling back to one direct fetch
+    // means a job that finished during a network blip is still picked up.
+    if (strom.readyState === EventSource.CLOSED) {
+      if (aapenStrom === strom) aapenStrom = null;
+      void hentKort(jobbId);
+    }
+  });
+}
+
+/**
+ * Re-fetches the card for a job and swaps it in.
+ *
+ * @param {string} jobbId
+ */
+async function hentKort(jobbId) {
+  const beholder = document.querySelector("#resultat");
+  if (!beholder) return;
+
+  try {
+    const svar = await fetch(`/api/jobs/${encodeURIComponent(jobbId)}/card`, {
+      headers: { "hx-request": "true" },
+    });
+    if (!svar.ok) return;
+    beholder.innerHTML = await svar.text();
+    kobleResultat(beholder, { varsle: false });
+  } catch {
+    // Offline or navigating away; the card stays as it is and the next page
+    // load will render the current state from the database.
+  }
+}
+
+/**
+ * Wires the buttons inside a job card, and starts following it if it is still
+ * running.
  *
  * @param {ParentNode} rot
+ * @param {{varsle?: boolean}} valg
  */
-function kobleResultat(rot) {
-  const kort = rot.querySelector("#resultat-kort");
+function kobleResultat(rot, valg = {}) {
+  const kort = rot.querySelector("#jobbkort");
   if (!kort) return;
+
+  const jobbId = kort.dataset.jobb;
+  if (kort.dataset.venter === "true") {
+    if (jobbId) folgJobb(jobbId);
+    return;
+  }
 
   // Move focus to the result so a screen reader and a keyboard user both land
   // on what just appeared.
   kort.focus({ preventScroll: true });
   kort.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  visVarsel(TEKST.ferdig);
+  if (valg.varsle !== false) visVarsel(TEKST.ferdig);
 
   const kopier = kort.querySelector(".kopier-lenke");
   kopier?.addEventListener("click", async () => {
@@ -147,6 +222,10 @@ function start() {
     koblePromptTeller(skjema);
     kobleForslag(skjema);
   }
+
+  // A job already running when the page loaded is rendered by the server;
+  // pick it up so the page keeps following it across a reload.
+  kobleResultat(document, { varsle: false });
 
   // HTMX replaces #resultat wholesale, so the new card is wired on each swap.
   document.body.addEventListener("htmx:afterSwap", (hendelse) => {

@@ -3,13 +3,14 @@
 use std::sync::Arc;
 
 use mediagenerator_auth::{OidcProvider, RolePolicy};
+use mediagenerator_storage::Database;
 
-use crate::config::AppConfig;
+use crate::{config::AppConfig, jobs::Jobs};
 
 /// Immutable state cloned into each request.
 ///
-/// Cloning is cheap: everything sits behind an [`Arc`]. Later phases add the
-/// database pool, the job queue handle and the provider clients here.
+/// Cloning is cheap: the configuration sits behind an [`Arc`], and the pool and
+/// the queue handle are themselves cheap to clone.
 #[derive(Debug, Clone)]
 pub struct AppState {
     /// Validated application configuration.
@@ -18,16 +19,24 @@ pub struct AppState {
     pub oidc: Arc<OidcProvider>,
     /// App role required to use the application, if any.
     pub role_policy: RolePolicy,
+    /// PostgreSQL connection pool.
+    pub db: Database,
+    /// Handle to the background job queue.
+    pub jobs: Jobs,
 }
 
 impl AppState {
-    /// Builds the shared state from a loaded configuration.
+    /// Builds the shared state from a loaded configuration and an open pool.
     ///
     /// # Errors
     ///
     /// Returns an error when the OpenID Connect settings are invalid. No
     /// network call is made here.
-    pub fn new(config: AppConfig) -> Result<Self, mediagenerator_auth::AuthError> {
+    pub fn new(
+        config: AppConfig,
+        db: Database,
+        jobs: Jobs,
+    ) -> Result<Self, mediagenerator_auth::AuthError> {
         let role_policy = RolePolicy::new(config.required_app_role());
         let oidc = OidcProvider::new(config.oidc())?;
 
@@ -35,6 +44,8 @@ impl AppState {
             config: Arc::new(config),
             oidc: Arc::new(oidc),
             role_policy,
+            db,
+            jobs,
         })
     }
 }

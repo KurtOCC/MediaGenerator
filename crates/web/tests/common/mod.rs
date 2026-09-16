@@ -6,11 +6,14 @@
 #![allow(dead_code)]
 
 use axum::Router;
+use mediagenerator_storage::Database;
 use mediagenerator_web::{
     AppConfig, AppState, build_router,
     config::{Environment, Secret, SessionStore},
+    jobs::Jobs,
     session::session_layer,
 };
+use sqlx::postgres::PgPool;
 use tower_sessions::MemoryStore;
 
 /// Builds a configuration that is valid but points at nothing real.
@@ -50,9 +53,25 @@ pub fn test_config() -> AppConfig {
     }
 }
 
+/// Opens a pool that never connects unless a query is run.
+///
+/// The tests in this crate stop at a guard, at the origin check or at a probe
+/// endpoint, so none of them reaches the database. A lazy pool keeps the suite
+/// runnable with no server anywhere, including in CI.
+fn lazy_pool(config: &AppConfig) -> Database {
+    PgPool::connect_lazy(config.database_url.expose())
+        .expect("the test connection string should parse")
+}
+
 /// Builds application state backed by [`test_config`].
+///
+/// Must be called from inside a Tokio runtime: starting the job queue spawns
+/// the worker tasks.
 pub fn test_state() -> AppState {
-    AppState::new(test_config()).expect("test configuration should build valid state")
+    let config = test_config();
+    let db = lazy_pool(&config);
+    let jobs = Jobs::spawn(db.clone());
+    AppState::new(config, db, jobs).expect("test configuration should build valid state")
 }
 
 /// Builds the full router with an in-memory session store.
@@ -64,6 +83,9 @@ pub fn test_router() -> Router {
 pub fn router_with(config: AppConfig) -> Router {
     let layer = session_layer(&config, MemoryStore::default())
         .expect("test session secret should be long enough");
-    let state = AppState::new(config).expect("test configuration should build valid state");
+    let db = lazy_pool(&config);
+    let jobs = Jobs::spawn(db.clone());
+    let state =
+        AppState::new(config, db, jobs).expect("test configuration should build valid state");
     build_router(state, layer)
 }

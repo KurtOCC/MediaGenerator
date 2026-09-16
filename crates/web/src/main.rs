@@ -1,8 +1,8 @@
 //! Mediagenerator server entry point.
 //!
 //! Reads configuration from the environment, installs tracing, opens the
-//! session store, builds the router and serves it until a shutdown signal
-//! arrives.
+//! database, starts the job workers, builds the router and serves it until a
+//! shutdown signal arrives.
 
 #![forbid(unsafe_code)]
 
@@ -10,18 +10,18 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use anyhow::Context as _;
 use mediagenerator_web::{
-    AppConfig, AppState, build_router, config::SessionStore as SessionStoreKind,
+    AppConfig, AppState, build_router, config::SessionStore as SessionStoreKind, jobs::Jobs,
     session::session_layer, telemetry,
 };
 use tokio::{net::TcpListener, signal};
 use tower_sessions::MemoryStore;
 use tower_sessions_sqlx_store::PostgresStore;
 
-/// Connection pool size for the session store.
+/// Connection pool size.
 ///
-/// Sessions are read once per request, so a small pool is enough; phase 4 adds
-/// a separate, larger pool for the application tables.
-const SESSION_POOL_SIZE: u32 = 5;
+/// Sized for the Burstable tier the development database runs on, which allows
+/// far fewer connections than a larger SKU.
+const POOL_SIZE: u32 = 10;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -37,6 +37,19 @@ async fn main() -> anyhow::Result<()> {
     let environment = config.app_env;
     let store_kind = config.session_store;
 
+    // Opens the pool and applies the migrations embedded in the binary.
+    let db = mediagenerator_storage::connect(config.database_url.expose(), POOL_SIZE)
+        .await
+        .context("failed to open the database")?;
+
+    // Anything left running by a previous process will never be finished by
+    // this one, so it is failed now rather than left spinning forever.
+    mediagenerator_web::jobs::fail_orphans(&db)
+        .await
+        .context("failed to sweep interrupted jobs")?;
+
+    let jobs = Jobs::spawn(db.clone());
+
     let listener = TcpListener::bind(address)
         .await
         .with_context(|| format!("failed to bind {address}"))?;
@@ -50,24 +63,19 @@ async fn main() -> anyhow::Result<()> {
         "mediagenerator started"
     );
 
-    // The two stores are different types, so the router is built inside each
-    // branch rather than behind a trait object.
+    // The two session stores are different types, so the router is built inside
+    // each branch rather than behind a trait object.
     match store_kind {
         SessionStoreKind::Postgres => {
-            let pool = sqlx::postgres::PgPoolOptions::new()
-                .max_connections(SESSION_POOL_SIZE)
-                .connect(config.database_url.expose())
-                .await
-                .context("failed to connect to the session database")?;
-
-            let store = PostgresStore::new(pool);
+            let store = PostgresStore::new(db.clone());
             store
                 .migrate()
                 .await
                 .context("failed to migrate the session table")?;
 
             let layer = session_layer(&config, store).context("failed to build session layer")?;
-            let state = AppState::new(config).context("failed to build application state")?;
+            let state =
+                AppState::new(config, db, jobs).context("failed to build application state")?;
             serve(listener, build_router(state, layer)).await?;
         }
         SessionStoreKind::Memory => {
@@ -77,7 +85,8 @@ async fn main() -> anyhow::Result<()> {
             );
             let layer = session_layer(&config, MemoryStore::default())
                 .context("failed to build session layer")?;
-            let state = AppState::new(config).context("failed to build application state")?;
+            let state =
+                AppState::new(config, db, jobs).context("failed to build application state")?;
             serve(listener, build_router(state, layer)).await?;
         }
     }
@@ -87,11 +96,17 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Serves `router` on `listener` until a shutdown signal arrives.
+///
+/// `into_make_service_with_connect_info` is what makes the peer address
+/// available to the audit trail.
 async fn serve(listener: TcpListener, router: axum::Router) -> anyhow::Result<()> {
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("server error")
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("server error")
 }
 
 /// Resolves when the process is asked to shut down.

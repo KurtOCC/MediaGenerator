@@ -6,8 +6,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod client_info;
 pub mod config;
 pub mod error;
+pub mod identity;
+pub mod jobs;
 pub mod middleware;
 pub mod render;
 pub mod routes;
@@ -40,8 +43,9 @@ const MAX_BODY_BYTES: usize = 256 * 1024;
 
 /// Upper bound on how long a single request may take.
 ///
-/// Generation itself is asynchronous and polled, so no user-facing request
-/// needs to be long-running. Server-Sent Events get an exemption in phase 4.
+/// Generation is asynchronous, so no ordinary request needs to be long-running.
+/// The Server-Sent Events route is deliberately outside this: see
+/// [`build_router`].
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long browsers may cache static assets.
@@ -87,21 +91,31 @@ where
                 .append_index_html_on_directories(false),
         );
 
+    let timeout = TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, REQUEST_TIMEOUT);
+
     // The double-submit token is checked on /api/* only. Those requests are all
     // issued by HTMX, which sends the header; the sign-out form is an ordinary
     // browser POST, covered by the origin check and the SameSite=Lax cookie.
-    let api = routes::api::router().layer(from_fn(middleware::csrf::verify_token));
+    let api = routes::api::router()
+        .layer(from_fn(middleware::csrf::verify_token))
+        .layer(timeout);
 
     // `require_auth` is applied last, so it is the outermost of the two and
     // runs first: `require_role` can then rely on the user being present.
+    //
+    // The event stream is merged in without the timeout: an SSE connection is
+    // meant to stay open for as long as the job runs, and a request timeout
+    // would sever it every 30 seconds.
     let protected = routes::pages::router()
+        .layer(timeout)
         .merge(api)
+        .merge(routes::api::stream_router())
         .layer(from_fn_with_state(state.role_policy.clone(), require_role))
         .layer(from_fn(require_auth));
 
     Router::new()
-        .merge(routes::health::router())
-        .merge(routes::auth::router())
+        .merge(routes::health::router().layer(timeout))
+        .merge(routes::auth::router().layer(timeout))
         .merge(protected)
         .nest_service("/assets", assets)
         // Set outside the guarded router: without this, the guards would also
@@ -110,10 +124,6 @@ where
         .fallback(not_found)
         .layer(session_layer)
         .layer(from_fn_with_state(origin, middleware::csrf::verify_origin))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::GATEWAY_TIMEOUT,
-            REQUEST_TIMEOUT,
-        ))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(CompressionLayer::new())
         // No cross-origin caller is expected: the UI is served from the same

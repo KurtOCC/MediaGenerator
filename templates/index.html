@@ -4,8 +4,14 @@
 {% include "partials/hero.html" %}
 {% include "partials/generator.html" %}
 
-{# Filled by HTMX when a generation finishes. #}
-<div id="resultat"></div>
+{#
+  Filled by HTMX when a generation is started. On load it already contains the
+  card for whatever the user has running, so a reload picks the job back up
+  instead of losing it.
+#}
+<div id="resultat">
+  {% if let Some(card) = active_job %}{{ card|safe }}{% endif %}
+</div>
 
 {% include "partials/generated.html" %}
 {% endblock %}

@@ -1,37 +1,58 @@
-//! JSON and HTMX endpoints behind `require_auth`.
+//! JSON, HTMX and Server-Sent Events endpoints behind `require_auth`.
 //!
-//! `POST /api/generate` is a mock in this phase: it validates the input, waits
-//! briefly and returns the finished result card. Phase 4 replaces the body of
-//! the handler with a queued job and an SSE stream, and phase 5 puts a real
-//! provider behind it. The request shape, the response fragment and everything
-//! the browser does stay as they are.
+//! Generation is asynchronous throughout. `POST /api/generate` writes a row and
+//! returns immediately with the card for a queued job; the browser then follows
+//! `GET /api/jobs/{id}/events` and re-fetches the card when the job finishes.
+//!
+//! Because the job lives in the database rather than in the page, a reload, a
+//! navigation away or even a server restart does not lose it.
 
-use std::time::Duration;
+use std::{convert::Infallible, time::Duration};
 
 use askama::Template;
 use axum::{
     Extension, Json, Router,
-    extract::{Form, State},
+    extract::{Form, Path, State},
+    response::{
+        Sse,
+        sse::{Event, KeepAlive},
+    },
     routing::{get, post},
 };
-
+use futures_util::{Stream, StreamExt as _};
 use mediagenerator_auth::SessionUser;
 use mediagenerator_domain::{
-    i18n::nb,
-    media::{MediaType, validate_prompt},
+    AuditAction, AuditEntry, Job, JobStatus, MediaType, NewJob, i18n::nb, validate_prompt,
 };
+use mediagenerator_storage::{StorageError, audit, jobs};
 use serde::{Deserialize, Serialize};
+use tokio_stream::wrappers::BroadcastStream;
+use tower_sessions::Session;
+use uuid::Uuid;
 
-use crate::{error::AppError, render::Page, state::AppState};
+use crate::{
+    client_info::ClientInfo, error::AppError, identity::local_user_id, render::Page,
+    state::AppState,
+};
 
-/// How long the mock pretends to work, so the spinner is actually visible.
-const MOCK_DURATION: Duration = Duration::from_millis(1200);
+/// How often a comment is sent on an idle SSE stream.
+///
+/// Without traffic, a proxy or a laptop going to sleep can drop the connection
+/// silently. The browser would reconnect, but a keep-alive is cheaper.
+const SSE_KEEP_ALIVE: Duration = Duration::from_secs(15);
 
-/// Returns the API routes.
+/// Returns the API routes that are subject to the request timeout.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/me", get(me))
         .route("/api/generate", post(generate))
+        .route("/api/jobs/{id}", get(job_status))
+        .route("/api/jobs/{id}/card", get(job_card))
+}
+
+/// Returns the streaming routes, which must not be subject to the timeout.
+pub fn stream_router() -> Router<AppState> {
+    Router::new().route("/api/jobs/{id}/events", get(job_events))
 }
 
 /// The signed-in user, as returned by `GET /api/me`.
@@ -67,57 +88,262 @@ struct GenerateForm {
     media_type: MediaType,
 }
 
-/// The rendered result card.
-#[derive(Template)]
-#[template(path = "partials/result_card.html")]
-struct ResultCardTemplate {
-    /// The prompt, echoed back under the preview.
-    prompt: String,
-    /// `image`, `audio` or `video`.
-    media_type: &'static str,
-    /// Human-readable time spent, e.g. "1,2 s".
-    elapsed: String,
-    /// True while generation is mocked, which disables the download actions.
-    is_mock: bool,
-    /// Where the finished asset lives. Empty while mocked.
-    asset_url: String,
-}
-
-/// Accepts a generation request and returns the result card.
-///
-/// Validation happens before anything else, and its message is the Norwegian
-/// one from the domain crate, so the same text appears whether the form was
-/// posted by HTMX or by a browser without scripting.
+/// Accepts a generation request and returns the card for the queued job.
 async fn generate(
     State(state): State<AppState>,
+    session: Session,
     Extension(user): Extension<SessionUser>,
+    client: ClientInfo,
     Form(form): Form<GenerateForm>,
-) -> Result<Page<ResultCardTemplate>, AppError> {
+) -> Result<Page<JobCardTemplate>, AppError> {
     let prompt = validate_prompt(&form.prompt, state.config.max_prompt_chars)?;
+    let user_id = local_user_id(&state.db, &session, &user).await?;
+
+    let job = jobs::create(
+        &state.db,
+        &NewJob {
+            user_id,
+            media_type: form.media_type,
+            // Provider parameters (size, quality, voice) are added in phase 5.
+            parameters: serde_json::json!({}),
+            prompt,
+        },
+    )
+    .await
+    .map_err(storage_error)?;
+
+    // Recorded before the work starts, so an attempt is in the trail even if
+    // the process dies mid-generation. The prompt itself is deliberately not
+    // copied here: it lives on the job row, under the retention policy.
+    let entry = AuditEntry {
+        user_id: Some(user_id),
+        action: AuditAction::GenerationRequested,
+        entity: "job",
+        entity_id: Some(job.id.to_string()),
+        ip: client.ip.clone(),
+        user_agent: client.user_agent.clone(),
+    };
+    if let Err(error) = audit::record(&state.db, &entry).await {
+        // A missing audit line must not cost the user their generation.
+        tracing::error!(%error, job_id = %job.id, "could not write the audit entry");
+    }
+
+    if state.jobs.enqueue(job.id).is_err() {
+        // The queue is saturated. Fail the row now rather than leaving it
+        // queued with nothing coming to pick it up.
+        let status = JobStatus::Failed {
+            code: mediagenerator_domain::ErrorCode::RateLimited,
+            message: nb::ERR_QUEUE_FULL.to_owned(),
+        };
+        let failed = jobs::finish(&state.db, job.id, &status)
+            .await
+            .map_err(storage_error)?;
+        return Ok(Page(JobCardTemplate::from_job(&failed)));
+    }
 
     tracing::info!(
-        oid = %user.oid,
-        media_type = %form.media_type,
-        prompt_chars = prompt.chars().count(),
-        "generation requested"
+        %user_id,
+        job_id = %job.id,
+        media_type = %job.media_type,
+        prompt_chars = job.prompt.chars().count(),
+        "generation queued"
     );
 
-    // Stands in for the provider round trip. Phase 4 turns this into a queued
-    // job the browser follows over SSE.
-    tokio::time::sleep(MOCK_DURATION).await;
+    Ok(Page(JobCardTemplate::from_job(&job)))
+}
 
-    Ok(Page(ResultCardTemplate {
-        prompt,
-        media_type: form.media_type.as_str(),
-        elapsed: format_elapsed(MOCK_DURATION),
-        is_mock: true,
-        asset_url: String::new(),
-    }))
+/// Status of one job, as JSON.
+#[derive(Debug, Serialize)]
+struct JobBody {
+    id: Uuid,
+    status: &'static str,
+    media_type: &'static str,
+    error_code: Option<&'static str>,
+    error_message: Option<String>,
+    /// Elapsed time in milliseconds, once the job has finished.
+    duration_ms: Option<i64>,
+}
+
+impl JobBody {
+    /// Builds the JSON view of a job.
+    fn from_job(job: &Job) -> Self {
+        Self {
+            id: job.id,
+            status: job.status.as_str(),
+            media_type: job.media_type.as_str(),
+            error_code: job.status.error_code().map(|code| code.as_str()),
+            error_message: job.status.error_message().map(ToOwned::to_owned),
+            duration_ms: job
+                .duration()
+                .map(|duration| duration.whole_milliseconds() as i64),
+        }
+    }
+}
+
+/// Returns the status of one of the caller's jobs.
+async fn job_status(
+    State(state): State<AppState>,
+    session: Session,
+    Extension(user): Extension<SessionUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<JobBody>, AppError> {
+    let job = load_own_job(&state, &session, &user, id).await?;
+    Ok(Json(JobBody::from_job(&job)))
+}
+
+/// The rendered card for a job, in whatever state it is in.
+#[derive(Template)]
+#[template(path = "partials/job_card.html")]
+pub struct JobCardTemplate {
+    /// Job identifier, used by the browser to open the event stream.
+    pub id: String,
+    /// The prompt, echoed back under the preview.
+    pub prompt: String,
+    /// `image`, `audio` or `video`.
+    pub media_type: &'static str,
+    /// Norwegian label for the media type.
+    pub media_label: &'static str,
+    /// `queued`, `running`, `succeeded`, `failed` or `cancelled`.
+    pub status: &'static str,
+    /// True while the job may still change, which is when the browser listens.
+    pub pending: bool,
+    /// True when the job failed.
+    pub failed: bool,
+    /// Norwegian failure message, when it failed.
+    pub error_message: String,
+    /// Human-readable time spent, e.g. "2,5 s". Empty while unfinished.
+    pub elapsed: String,
+    /// Where the finished asset lives. Empty until phase 5 stores one.
+    pub asset_url: String,
+}
+
+impl JobCardTemplate {
+    /// Builds the card for a job.
+    pub fn from_job(job: &Job) -> Self {
+        let failed = matches!(job.status, JobStatus::Failed { .. });
+
+        Self {
+            id: job.id.to_string(),
+            prompt: job.prompt.clone(),
+            media_type: job.media_type.as_str(),
+            media_label: job.media_type.label(),
+            status: job.status.as_str(),
+            pending: !job.status.is_terminal(),
+            failed,
+            error_message: job
+                .status
+                .error_message()
+                .unwrap_or(nb::ERR_INTERNAL)
+                .to_owned(),
+            elapsed: job.duration().map(format_elapsed).unwrap_or_default(),
+            // Phase 5 fills this with a time-limited SAS URL.
+            asset_url: String::new(),
+        }
+    }
+}
+
+/// Returns the card for one of the caller's jobs.
+async fn job_card(
+    State(state): State<AppState>,
+    session: Session,
+    Extension(user): Extension<SessionUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Page<JobCardTemplate>, AppError> {
+    let job = load_own_job(&state, &session, &user, id).await?;
+    Ok(Page(JobCardTemplate::from_job(&job)))
+}
+
+/// Streams status changes for one of the caller's jobs.
+///
+/// The current status is sent first, so a browser that connects after the job
+/// already finished is told immediately rather than waiting for an event that
+/// will never come. The stream then ends on a terminal status.
+async fn job_events(
+    State(state): State<AppState>,
+    session: Session,
+    Extension(user): Extension<SessionUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
+    // Ownership is checked once, here. The stream that follows is filtered by
+    // this id, so nothing else can reach it.
+    let job = load_own_job(&state, &session, &user, id).await?;
+
+    let media_type = job.media_type;
+    let initial = futures_util::stream::once(async move { JobBody::from_job(&job) });
+
+    let updates = BroadcastStream::new(state.jobs.subscribe())
+        .filter_map(move |event| {
+            let matched = event
+                .ok()
+                .filter(|event| event.job_id == id)
+                .map(|event| event.status);
+            async move { matched }
+        })
+        .map(move |status| JobBody {
+            id,
+            status: status.as_str(),
+            media_type: media_type.as_str(),
+            error_code: status.error_code().map(|code| code.as_str()),
+            error_message: status.error_message().map(ToOwned::to_owned),
+            duration_ms: None,
+        });
+
+    // Emit the terminal status, then stop. Closing the stream is what tells the
+    // browser to stop listening; an SSE connection left open would be
+    // reconnected forever.
+    let mut terminal_seen = false;
+    let stream = initial
+        .chain(updates)
+        .take_while(move |body| {
+            let emit = !terminal_seen;
+            terminal_seen = terminal_seen || is_terminal(body.status);
+            async move { emit }
+        })
+        .map(|body| to_event(&body));
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(SSE_KEEP_ALIVE)))
+}
+
+/// Renders a job status as an SSE `status` event.
+fn to_event(body: &JobBody) -> Result<Event, Infallible> {
+    // Serialising a plain struct of owned strings cannot fail; if it somehow
+    // did, an empty payload is better than dropping the connection.
+    let data = serde_json::to_string(body).unwrap_or_else(|error| {
+        tracing::error!(%error, "could not serialise a job event");
+        String::from("{}")
+    });
+    Ok(Event::default().event("status").data(data))
+}
+
+/// Returns `true` for a status the job cannot move on from.
+fn is_terminal(status: &str) -> bool {
+    matches!(status, "succeeded" | "failed" | "cancelled")
+}
+
+/// Loads a job, refusing anything the caller does not own.
+async fn load_own_job(
+    state: &AppState,
+    session: &Session,
+    user: &SessionUser,
+    id: Uuid,
+) -> Result<Job, AppError> {
+    let user_id = local_user_id(&state.db, session, user).await?;
+    jobs::by_id_for_user(&state.db, id, user_id)
+        .await
+        .map_err(storage_error)
+}
+
+/// Maps a storage failure to the user-facing error.
+fn storage_error(error: StorageError) -> AppError {
+    match error {
+        StorageError::NotFound => AppError::NotFound,
+        other => AppError::Internal(anyhow::Error::new(other)),
+    }
 }
 
 /// Formats a duration the way Norwegian writes it: comma as decimal separator.
-fn format_elapsed(duration: Duration) -> String {
-    let seconds = duration.as_secs_f64();
+fn format_elapsed(duration: time::Duration) -> String {
+    let seconds = duration.as_seconds_f64().max(0.0);
     let rendered = format!("{seconds:.1}");
     format!("{} {}", rendered.replace('.', ","), nb::SECONDS_SUFFIX)
 }
@@ -128,8 +354,14 @@ mod tests {
 
     #[test]
     fn elapsed_uses_a_comma_as_the_decimal_separator() {
-        assert_eq!(format_elapsed(Duration::from_millis(1200)), "1,2 s");
-        assert_eq!(format_elapsed(Duration::from_millis(450)), "0,5 s");
-        assert_eq!(format_elapsed(Duration::from_secs(12)), "12,0 s");
+        assert_eq!(format_elapsed(time::Duration::milliseconds(1200)), "1,2 s");
+        assert_eq!(format_elapsed(time::Duration::milliseconds(450)), "0,5 s");
+        assert_eq!(format_elapsed(time::Duration::seconds(12)), "12,0 s");
+    }
+
+    #[test]
+    fn a_negative_duration_does_not_render_as_negative() {
+        // Clock adjustments can make completed_at precede started_at.
+        assert_eq!(format_elapsed(time::Duration::milliseconds(-10)), "0,0 s");
     }
 }

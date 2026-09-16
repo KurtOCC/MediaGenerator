@@ -13,7 +13,8 @@ use thiserror::Error;
 ///
 /// These strings are written to the database (`jobs.error_code`) and returned in
 /// JSON payloads, so they must not be renamed without a migration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     /// The submitted input failed validation.
     Validation,
@@ -74,5 +75,68 @@ impl DomainError {
             Self::Validation(_) => ErrorCode::Validation,
             Self::NotFound(_) => ErrorCode::NotFound,
         }
+    }
+}
+
+impl ErrorCode {
+    /// Parses a code written by an earlier build, falling back to
+    /// [`ErrorCode::Internal`].
+    ///
+    /// Rows outlive deployments. A code this build does not recognise is still
+    /// a real failure, so it degrades to the generic one rather than erroring.
+    pub fn from_str_or_internal(value: &str) -> Self {
+        match value {
+            "validation" => Self::Validation,
+            "unauthenticated" => Self::Unauthenticated,
+            "forbidden" => Self::Forbidden,
+            "not_found" => Self::NotFound,
+            "rate_limited" => Self::RateLimited,
+            "content_filter" => Self::ContentFilter,
+            "upstream" => Self::Upstream,
+            _ => Self::Internal,
+        }
+    }
+
+    /// Returns the Norwegian message shown for this code.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::Validation => crate::i18n::nb::ERR_VALIDATION,
+            Self::Unauthenticated => crate::i18n::nb::ERR_UNAUTHENTICATED,
+            Self::Forbidden => crate::i18n::nb::ERR_FORBIDDEN,
+            Self::NotFound => crate::i18n::nb::ERR_NOT_FOUND,
+            Self::RateLimited => crate::i18n::nb::ERR_RATE_LIMITED,
+            Self::ContentFilter => crate::i18n::nb::ERR_CONTENT_FILTER,
+            Self::Upstream => crate::i18n::nb::ERR_UPSTREAM,
+            Self::Internal => crate::i18n::nb::ERR_INTERNAL,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_code_round_trips_through_its_string() {
+        for code in [
+            ErrorCode::Validation,
+            ErrorCode::Unauthenticated,
+            ErrorCode::Forbidden,
+            ErrorCode::NotFound,
+            ErrorCode::RateLimited,
+            ErrorCode::ContentFilter,
+            ErrorCode::Upstream,
+            ErrorCode::Internal,
+        ] {
+            assert_eq!(ErrorCode::from_str_or_internal(code.as_str()), code);
+        }
+    }
+
+    #[test]
+    fn a_code_from_a_future_build_degrades_to_internal() {
+        assert_eq!(
+            ErrorCode::from_str_or_internal("noe_nytt"),
+            ErrorCode::Internal
+        );
     }
 }

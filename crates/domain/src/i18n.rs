@@ -109,6 +109,17 @@ pub mod nb {
     pub const TOAST_DONE: &str = "Genereringen er ferdig";
     /// Heading of the result card.
     pub const RESULT_HEADING: &str = "Resultat";
+    /// Heading of the card while the job is still running.
+    pub const RESULT_PENDING_HEADING: &str = "Genererer";
+    /// Heading of the card when the job failed.
+    pub const RESULT_FAILED_HEADING: &str = "Genereringen feilet";
+    /// Status text while the job waits for a free worker.
+    pub const STATUS_QUEUED: &str = "I kø …";
+    /// Status text while the job is being generated.
+    pub const STATUS_RUNNING: &str = "Genererer …";
+    /// Reassurance that leaving the page does not cancel the job.
+    pub const PENDING_SAFE_TO_LEAVE: &str =
+        "Du kan trygt navigere vekk eller oppdatere siden. Du får beskjed når den er ferdig.";
     /// Label in front of the prompt on the result card.
     pub const RESULT_PROMPT_LABEL: &str = "Beskrivelse:";
     /// Shown in place of a preview while generation is still mocked.
@@ -157,6 +168,16 @@ pub mod nb {
         "AI-tjenesten svarer ikke akkurat nå. Prøv igjen om noen minutter.";
     /// Shown when the CSRF token is missing or does not match.
     pub const ERR_CSRF: &str = "Sikkerhetssjekken feilet. Last siden på nytt og prøv igjen.";
+    /// Generic validation message, used when only a code is available.
+    /// Shown when the global job queue is saturated.
+    pub const ERR_QUEUE_FULL: &str =
+        "Det er mye som genereres akkurat nå. Prøv igjen om et par minutter.";
+    /// Shown for a job left unfinished when the server restarted.
+    pub const ERR_JOB_INTERRUPTED: &str =
+        "Genereringen ble avbrutt fordi tjenesten startet på nytt. Prøv igjen.";
+
+    pub const ERR_VALIDATION: &str = "Det du sendte inn kunne ikke brukes.";
+
     /// Shown when the sign-in flow failed for any reason we will not detail.
     pub const ERR_LOGIN_FAILED: &str = "Innloggingen feilet. Prøv å logge inn på nytt.";
     /// Shown when the prompt is empty.
