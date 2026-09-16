@@ -6,12 +6,20 @@
 
 #![forbid(unsafe_code)]
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
 
 use anyhow::Context as _;
+use mediagenerator_providers::Providers;
+use mediagenerator_storage::BlobStore;
 use mediagenerator_web::{
-    AppConfig, AppState, build_router, config::SessionStore as SessionStoreKind, jobs::Jobs,
-    session::session_layer, telemetry,
+    AppConfig, AppState, build_router,
+    config::SessionStore as SessionStoreKind,
+    jobs::{Jobs, Runtime},
+    session::session_layer,
+    telemetry,
 };
 use tokio::{net::TcpListener, signal};
 use tower_sessions::MemoryStore;
@@ -48,7 +56,22 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to sweep interrupted jobs")?;
 
-    let jobs = Jobs::spawn(db.clone());
+    let providers = Arc::new(
+        Providers::new(config.providers()).context("failed to build the Azure AI clients")?,
+    );
+    let blobs = Arc::new(
+        BlobStore::new(
+            &config.azure_storage_account,
+            &config.azure_storage_container,
+        )
+        .context("failed to build the blob storage client")?,
+    );
+
+    let jobs = Jobs::spawn(Runtime {
+        db: db.clone(),
+        providers: Arc::clone(&providers),
+        blobs: Arc::clone(&blobs),
+    });
 
     let listener = TcpListener::bind(address)
         .await
@@ -74,8 +97,8 @@ async fn main() -> anyhow::Result<()> {
                 .context("failed to migrate the session table")?;
 
             let layer = session_layer(&config, store).context("failed to build session layer")?;
-            let state =
-                AppState::new(config, db, jobs).context("failed to build application state")?;
+            let state = AppState::new(config, db, providers, blobs, jobs)
+                .context("failed to build application state")?;
             serve(listener, build_router(state, layer)).await?;
         }
         SessionStoreKind::Memory => {
@@ -85,8 +108,8 @@ async fn main() -> anyhow::Result<()> {
             );
             let layer = session_layer(&config, MemoryStore::default())
                 .context("failed to build session layer")?;
-            let state =
-                AppState::new(config, db, jobs).context("failed to build application state")?;
+            let state = AppState::new(config, db, providers, blobs, jobs)
+                .context("failed to build application state")?;
             serve(listener, build_router(state, layer)).await?;
         }
     }

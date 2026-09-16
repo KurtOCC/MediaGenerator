@@ -12,10 +12,12 @@
 
 pub mod assets;
 pub mod audit;
+pub mod blob;
 pub mod db;
 pub mod error;
 pub mod jobs;
 pub mod users;
 
+pub use blob::BlobStore;
 pub use db::{Database, connect};
 pub use error::StorageError;

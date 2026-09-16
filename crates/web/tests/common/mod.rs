@@ -5,12 +5,16 @@
 
 #![allow(dead_code)]
 
+use std::sync::Arc;
+
 use axum::Router;
+use mediagenerator_providers::Providers;
+use mediagenerator_storage::BlobStore;
 use mediagenerator_storage::Database;
 use mediagenerator_web::{
     AppConfig, AppState, build_router,
     config::{Environment, Secret, SessionStore},
-    jobs::Jobs,
+    jobs::{Jobs, Runtime},
     session::session_layer,
 };
 use sqlx::postgres::PgPool;
@@ -70,8 +74,20 @@ fn lazy_pool(config: &AppConfig) -> Database {
 pub fn test_state() -> AppState {
     let config = test_config();
     let db = lazy_pool(&config);
-    let jobs = Jobs::spawn(db.clone());
-    AppState::new(config, db, jobs).expect("test configuration should build valid state")
+    let providers = Arc::new(Providers::new(config.providers()).expect("providers should build"));
+    let blobs = Arc::new(
+        BlobStore::new(
+            &config.azure_storage_account,
+            &config.azure_storage_container,
+        )
+        .expect("blob client should build"),
+    );
+    let jobs = Jobs::spawn(Runtime {
+        db: db.clone(),
+        providers: Arc::clone(&providers),
+        blobs: Arc::clone(&blobs),
+    });
+    AppState::new(config, db, providers, blobs, jobs).expect("test state should build")
 }
 
 /// Builds the full router with an in-memory session store.
@@ -84,8 +100,19 @@ pub fn router_with(config: AppConfig) -> Router {
     let layer = session_layer(&config, MemoryStore::default())
         .expect("test session secret should be long enough");
     let db = lazy_pool(&config);
-    let jobs = Jobs::spawn(db.clone());
-    let state =
-        AppState::new(config, db, jobs).expect("test configuration should build valid state");
+    let providers = Arc::new(Providers::new(config.providers()).expect("providers should build"));
+    let blobs = Arc::new(
+        BlobStore::new(
+            &config.azure_storage_account,
+            &config.azure_storage_container,
+        )
+        .expect("blob client should build"),
+    );
+    let jobs = Jobs::spawn(Runtime {
+        db: db.clone(),
+        providers: Arc::clone(&providers),
+        blobs: Arc::clone(&blobs),
+    });
+    let state = AppState::new(config, db, providers, blobs, jobs).expect("test state should build");
     build_router(state, layer)
 }

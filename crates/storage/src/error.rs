@@ -18,6 +18,10 @@ pub enum StorageError {
     #[error("database error")]
     Database(#[from] sqlx::Error),
 
+    /// A Blob Storage operation failed.
+    #[error("blob storage error: {0}")]
+    Blob(String),
+
     /// A migration failed to apply.
     #[error("migration failed")]
     Migration(#[from] sqlx::migrate::MigrateError),
@@ -29,7 +33,7 @@ impl StorageError {
         match self {
             Self::NotFound => ErrorCode::NotFound,
             Self::Conflict => ErrorCode::Validation,
-            Self::Database(_) | Self::Migration(_) => ErrorCode::Internal,
+            Self::Database(_) | Self::Migration(_) | Self::Blob(_) => ErrorCode::Internal,
         }
     }
 }

@@ -18,8 +18,7 @@ use tower_sessions::Session;
 use mediagenerator_storage::jobs;
 
 use crate::{
-    error::AppError, identity::local_user_id, middleware::csrf, render::Page,
-    routes::api::JobCardTemplate, state::AppState,
+    error::AppError, identity::local_user_id, middleware::csrf, render::Page, state::AppState,
 };
 
 /// Returns the page routes.
@@ -132,7 +131,8 @@ async fn active_job_card(
         .ok()?;
 
     let newest = active.first()?;
-    JobCardTemplate::from_job(newest)
+    crate::routes::api::card_for(state, newest)
+        .await
         .render()
         .inspect_err(|error| tracing::error!(%error, "could not render the active job card"))
         .ok()

@@ -14,7 +14,7 @@ use axum::{
     Extension, Json, Router,
     extract::{Form, Path, State},
     response::{
-        Sse,
+        Redirect, Sse,
         sse::{Event, KeepAlive},
     },
     routing::{get, post},
@@ -24,7 +24,7 @@ use mediagenerator_auth::SessionUser;
 use mediagenerator_domain::{
     AuditAction, AuditEntry, Job, JobStatus, MediaType, NewJob, i18n::nb, validate_prompt,
 };
-use mediagenerator_storage::{StorageError, audit, jobs};
+use mediagenerator_storage::{StorageError, assets, audit, jobs};
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::BroadcastStream;
 use tower_sessions::Session;
@@ -48,6 +48,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/generate", post(generate))
         .route("/api/jobs/{id}", get(job_status))
         .route("/api/jobs/{id}/card", get(job_card))
+        .route("/api/assets/{id}", get(asset))
 }
 
 /// Returns the streaming routes, which must not be subject to the timeout.
@@ -138,7 +139,7 @@ async fn generate(
         let failed = jobs::finish(&state.db, job.id, &status)
             .await
             .map_err(storage_error)?;
-        return Ok(Page(JobCardTemplate::from_job(&failed)));
+        return Ok(Page(JobCardTemplate::from_job(&failed, None)));
     }
 
     tracing::info!(
@@ -149,7 +150,7 @@ async fn generate(
         "generation queued"
     );
 
-    Ok(Page(JobCardTemplate::from_job(&job)))
+    Ok(Page(JobCardTemplate::from_job(&job, None)))
 }
 
 /// Status of one job, as JSON.
@@ -218,8 +219,12 @@ pub struct JobCardTemplate {
 }
 
 impl JobCardTemplate {
-    /// Builds the card for a job.
-    pub fn from_job(job: &Job) -> Self {
+    /// Builds the card for a job, given the asset it produced, if any.
+    ///
+    /// The card links to `/api/assets/{id}`, not to a SAS URL. That route
+    /// mints a fresh link on each request, so a page left open overnight
+    /// still works and no expiring URL is ever baked into the HTML.
+    pub fn from_job(job: &Job, asset_id: Option<Uuid>) -> Self {
         let failed = matches!(job.status, JobStatus::Failed { .. });
 
         Self {
@@ -236,8 +241,9 @@ impl JobCardTemplate {
                 .unwrap_or(nb::ERR_INTERNAL)
                 .to_owned(),
             elapsed: job.duration().map(format_elapsed).unwrap_or_default(),
-            // Phase 5 fills this with a time-limited SAS URL.
-            asset_url: String::new(),
+            asset_url: asset_id
+                .map(|id| format!("/api/assets/{id}"))
+                .unwrap_or_default(),
         }
     }
 }
@@ -250,7 +256,7 @@ async fn job_card(
     Path(id): Path<Uuid>,
 ) -> Result<Page<JobCardTemplate>, AppError> {
     let job = load_own_job(&state, &session, &user, id).await?;
-    Ok(Page(JobCardTemplate::from_job(&job)))
+    Ok(Page(card_for(&state, &job).await))
 }
 
 /// Streams status changes for one of the caller's jobs.
@@ -346,6 +352,63 @@ fn format_elapsed(duration: time::Duration) -> String {
     let seconds = duration.as_seconds_f64().max(0.0);
     let rendered = format!("{seconds:.1}");
     format!("{} {}", rendered.replace('.', ","), nb::SECONDS_SUFFIX)
+}
+
+/// Redirects to a time-limited link for one of the caller's assets.
+///
+/// The ownership check is the point of this route existing at all: without it,
+/// knowing an id would be enough to read anyone's media. The SAS is minted per
+/// request and expires after `SAS_TTL_MINUTES`, so a copied link stops working
+/// rather than becoming a permanent public URL.
+async fn asset(
+    State(state): State<AppState>,
+    session: Session,
+    Extension(user): Extension<SessionUser>,
+    client: ClientInfo,
+    Path(id): Path<Uuid>,
+) -> Result<Redirect, AppError> {
+    let user_id = local_user_id(&state.db, &session, &user).await?;
+
+    let asset = assets::by_id_for_user(&state.db, id, user_id)
+        .await
+        .map_err(storage_error)?;
+
+    let url = state
+        .blobs
+        .read_url(&asset.blob_path, state.config.sas_ttl())
+        .await
+        .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?;
+
+    // Handing out a readable link is worth recording: it is the moment the
+    // media actually leaves the private container.
+    let entry = AuditEntry {
+        user_id: Some(user_id),
+        action: AuditAction::AssetAccessed,
+        entity: "asset",
+        entity_id: Some(asset.id.to_string()),
+        ip: client.ip.clone(),
+        user_agent: client.user_agent.clone(),
+    };
+    if let Err(error) = audit::record(&state.db, &entry).await {
+        tracing::error!(%error, asset_id = %asset.id, "could not write the audit entry");
+    }
+
+    Ok(Redirect::temporary(&url))
+}
+
+/// Builds the card for a job, looking up the asset it produced.
+///
+/// A failure to read the asset degrades to a card without a preview rather
+/// than to an error page: the job itself is unaffected.
+pub async fn card_for(state: &AppState, job: &Job) -> JobCardTemplate {
+    let asset_id = assets::for_job(&state.db, job.id)
+        .await
+        .inspect_err(|error| tracing::error!(%error, job_id = %job.id, "could not read the asset"))
+        .ok()
+        .flatten()
+        .map(|asset| asset.id);
+
+    JobCardTemplate::from_job(job, asset_id)
 }
 
 #[cfg(test)]

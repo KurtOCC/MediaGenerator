@@ -170,6 +170,9 @@ pub mod nb {
     pub const ERR_CSRF: &str = "Sikkerhetssjekken feilet. Last siden på nytt og prøv igjen.";
     /// Generic validation message, used when only a code is available.
     /// Shown when the global job queue is saturated.
+    /// Shown when an asynchronous generation never finished in time.
+    pub const ERR_GENERATION_TIMEOUT: &str = "Genereringen tok for lang tid og ble avbrutt. Prøv igjen, gjerne med en kortere beskrivelse.";
+
     pub const ERR_QUEUE_FULL: &str =
         "Det er mye som genereres akkurat nå. Prøv igjen om et par minutter.";
     /// Shown for a job left unfinished when the server restarted.

@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use mediagenerator_auth::{OidcProvider, RolePolicy};
-use mediagenerator_storage::Database;
+use mediagenerator_providers::Providers;
+use mediagenerator_storage::{BlobStore, Database};
 
 use crate::{config::AppConfig, jobs::Jobs};
 
@@ -21,6 +22,10 @@ pub struct AppState {
     pub role_policy: RolePolicy,
     /// PostgreSQL connection pool.
     pub db: Database,
+    /// The three Azure AI Foundry clients.
+    pub providers: Arc<Providers>,
+    /// Private container holding generated media.
+    pub blobs: Arc<BlobStore>,
     /// Handle to the background job queue.
     pub jobs: Jobs,
 }
@@ -35,6 +40,8 @@ impl AppState {
     pub fn new(
         config: AppConfig,
         db: Database,
+        providers: Arc<Providers>,
+        blobs: Arc<BlobStore>,
         jobs: Jobs,
     ) -> Result<Self, mediagenerator_auth::AuthError> {
         let role_policy = RolePolicy::new(config.required_app_role());
@@ -45,6 +52,8 @@ impl AppState {
             oidc: Arc::new(oidc),
             role_policy,
             db,
+            providers,
+            blobs,
             jobs,
         })
     }

@@ -16,6 +16,7 @@ figment = { version = "0.10.19", features = ["env"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 mediagenerator-auth = { version = "0.1.0", path = "../auth" }
 mediagenerator-domain = { version = "0.1.0", path = "../domain" }
+mediagenerator-providers = { version = "0.1.0", path = "../providers" }
 mediagenerator-storage = { version = "0.1.0", path = "../storage" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

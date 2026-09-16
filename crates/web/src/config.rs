@@ -257,3 +257,34 @@ pub enum ConfigError {
     #[error("invalid configuration: {0}")]
     Invalid(String),
 }
+
+impl AppConfig {
+    /// Returns the settings for the Azure AI Foundry clients.
+    pub fn providers(&self) -> mediagenerator_providers::ProviderConfig {
+        mediagenerator_providers::ProviderConfig {
+            endpoint: self.azure_openai_endpoint.clone(),
+            api_version: self.azure_openai_api_version.clone(),
+            image_deployment: self.image_deployment.clone(),
+            audio_deployment: self.audio_deployment.clone(),
+            video_deployment: self.video_deployment.clone(),
+            tenant_id: self.azure_tenant_id.clone(),
+            client_id: self.azure_client_id.clone(),
+            // Deliberately not `AZURE_CLIENT_SECRET`. That secret belongs to
+            // the app registration that signs users in, which has no data-plane
+            // access to the AI Foundry resource; handing it to the providers
+            // would produce a 401 on every generation. The data-plane identity
+            // is the Managed Identity in Azure, the developer's `az login`
+            // session locally, or the API key below.
+            client_secret: None,
+            api_key: self
+                .azure_openai_api_key
+                .as_ref()
+                .map(|secret| secret.expose().to_owned()),
+        }
+    }
+
+    /// Returns how long a generated SAS link stays valid.
+    pub const fn sas_ttl(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.sas_ttl_minutes * 60)
+    }
+}

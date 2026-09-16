@@ -6,7 +6,7 @@ en prompt. Genereringen skjer mot Microsoft Azure AI Foundry / Azure OpenAI.
 
 Hele applikasjonen er skrevet i Rust.
 
-> **Status:** Fase 4 av 6 er ferdig. Se [Leveranseplan](#leveranseplan).
+> **Status:** Fase 5 av 6 er ferdig. Se [Leveranseplan](#leveranseplan).
 
 ---
 
@@ -18,6 +18,8 @@ Hele applikasjonen er skrevet i Rust.
 - [Innlogging](#innlogging)
 - [Grensesnittet](#grensesnittet)
 - [Jobbmodellen](#jobbmodellen)
+- [Generering mot Azure](#generering-mot-azure)
+- [Lagring og lenker](#lagring-og-lenker)
 - [Miljøvariabler](#miljøvariabler)
 - [Entra ID – app-registrering steg for steg](#entra-id--app-registrering-steg-for-steg)
 - [Azure-ressurser som må opprettes](#azure-ressurser-som-må-opprettes)
@@ -251,6 +253,67 @@ To databasebeskrankninger er verdt å merke seg: `jobs.status` har en
 check-constraint på de fem gyldige verdiene, og `jobs_error_matches_status`
 krever at en jobb har feilkode hvis og bare hvis den er `failed`.
 
+## Generering mot Azure
+
+Bilde og tale er synkrone: kallet returnerer det ferdige mediet. Video er en
+ekte asynkron jobb som opprettes, pollers og hentes. Det er derfor
+`MediaProvider` har både `submit` og `poll`.
+
+| Operasjon | Kall |
+| --- | --- |
+| Bilde | `POST {endpoint}/openai/v1/images/generations` |
+| Tale | `POST {endpoint}/openai/v1/audio/speech` |
+| Video, opprett | `POST {endpoint}/openai/v1/video/generations/jobs` |
+| Video, poll | `GET {endpoint}/openai/v1/video/generations/jobs/{id}` |
+| Video, hent | `GET {endpoint}/openai/v1/video/generations/{id}/content/video` |
+
+**Dette er v1-API-et, ikke det spesifikasjonen beskriver.** Spesifikasjonen
+oppgir `{endpoint}/openai/deployments/{DEPLOYMENT}/images/generations` med en
+datert `api-version`. Azure OpenAI har flyttet til et v1-API der stien er
+`/openai/v1/...` og deployment-navnet ligger i request-body som `model`.
+Verifisert mot Microsoft Learn 16. september 2026 og kjørt mot ekte ressurs.
+`api-version` er valgfri på v1 og defaulter til `v1`; vi sender `preview`, og
+verdien er fortsatt konfigurerbar gjennom `AZURE_OPENAI_API_VERSION`.
+
+**Autentisering** er et Entra-token for
+`https://cognitiveservices.azure.com/.default`: Managed Identity i Azure,
+`az login` lokalt, API-nøkkel som siste utvei. Nøkkelen avvises når
+`APP_ENV=production`. Valget mellom Managed Identity og utviklerkjeden gjøres på
+`IDENTITY_ENDPOINT`/`MSI_ENDPOINT` i miljøet — ikke ved å prøve dem etter tur,
+for konstruksjonen lykkes overalt og bare token-hentingen feiler, etter nesten
+to minutters retry.
+
+**`AZURE_CLIENT_SECRET` sendes bevisst ikke til providerne.** Den hemmeligheten
+hører til app-registreringen som logger inn brukere, og den har ingen
+dataplan-tilgang på Foundry-ressursen. Å bruke den ville gitt 401 på hver
+generering.
+
+**Robusthet:** timeout på 180 s, inntil fire forsøk med eksponentiell backoff og
+full jitter, og `Retry-After` respekteres opp til 60 sekunder. Bare rate limits
+og oppstrømsfeil prøves på nytt — en avvist prompt feiler likt hver gang og
+ville bare brent kvote. Feilkartleggingen skiller innholdsfilter (egen norsk
+melding) fra validering, auth, rate limit og oppstrømsfeil.
+
+## Lagring og lenker
+
+Generert media lastes opp til en **privat** container. Nettleseren får aldri en
+provider-URL og aldri en permanent URL.
+
+Kortet lenker til `/api/assets/{id}`, ikke til en SAS. Den ruten sjekker
+eierskap og lager en **fersk** SAS ved hvert kall, så en side som har stått åpen
+over natten fortsatt virker, og ingen utløpende URL bakes inn i HTML-en.
+
+**User delegation SAS, ikke service SAS.** En service SAS signeres med
+kontonøkkelen, som da må ligge et sted. En user delegation SAS signeres med en
+kortlevd nøkkel Blob-tjenesten utsteder mot et Entra-token, så kontonøklene
+aldri trengs og kan holdes deaktivert. Hver lenke er også sporbar til
+identiteten som utstedte den.
+
+Signaturen er håndskrevet fra det dokumenterte oppsettet, og
+[crates/storage/tests/blob.rs](crates/storage/tests/blob.rs) kjører en ekte
+rundtur mot Azure: last opp, signer, hent uten legitimasjon, og verifiser at den
+usignerte URL-en avvises og at en utløpt signatur slutter å virke.
+
 ---
 
 ## Miljøvariabler
@@ -349,6 +412,9 @@ Utviklingsmiljøet står i abonnementet **Oslofjord IT Drift**:
 | SKU | Burstable `Standard_B1ms`, 32 GB, 7 dagers backup |
 | Databaser | `mediagenerator`, `mediagenerator_test` |
 | Nettverk | Offentlig tilgang, brannmurregel for én IP |
+| Lagringskonto | `stmediagenwsfg7jc5` (norwayeast), privat container `media` |
+| AI Foundry | `mediagenerator-it-resource` (swedencentral) |
+| Deployments | `bilde` = gpt-image-1.5, `tale` = tts, `video` = mangler kvote |
 
 Anslått kostnad er i størrelsesorden 15 USD/måned. SKU-en kan skaleres opp uten
 å opprette noe på nytt.
@@ -403,6 +469,23 @@ cargo test -p mediagenerator-storage
 ```
 
 Dette er den eneste kontrollen av SQL-en, siden spørringene bruker runtime-API-et
+
+### Live-tester mot Azure
+
+Providerne og Blob Storage har egne tester som snakker med ekte Azure. De
+koster kvote, så de hopper over seg selv med mindre miljøvariabelen er satt.
+
+```bash
+export MEDIAGENERATOR_TEST_OPENAI_ENDPOINT="https://<ressurs>.openai.azure.com"
+cargo test -p mediagenerator-providers --test live
+
+export MEDIAGENERATOR_TEST_STORAGE_ACCOUNT="<lagringskonto>"
+cargo test -p mediagenerator-storage --test blob
+```
+
+Identiteten du er logget inn som trenger **Storage Blob Data Contributor**
+på lagringskontoen. Kontrollplan-rollene (Owner, Contributor) gir ikke
+dataplan-tilgang.
 og ikke `query!`-makroene. Kjør dem når du endrer en spørring eller skjemaet.
 
 Regler som håndheves i kodebasen:
@@ -529,6 +612,30 @@ revisjonssporet skal ikke stille bli en ekstra kopi av innholdet.
 foran prosessen, så peer-adressen er ingressen. Headeren brukes aldri til en
 tilgangsavgjørelse, og en forfalsket verdi kan derfor ikke gi noen noe.
 
+**Video er implementert, men ikke verifisert mot en levende deployment.**
+`sora-2`-kvoten i abonnementet (30 av 30) er i sin helhet tildelt
+`magic-course-resource`, et annet prosjekt, så ingen Sora-deployment kunne
+opprettes. Koden er skrevet mot Microsoft Learn-referansen og enhetstestet,
+men ingen video er faktisk generert. Bilde og tale er kjørt for ekte.
+
+**Bildemodellen kjører på DataZoneStandard.** `gpt-image-1.5` hadde ingen
+ledig kvote på GlobalStandard, men 10 ledige på DataZoneStandard. Det holder
+dessuten dataene innenfor EU-datasonen, som passer bedre uansett.
+
+**Tale bruker `tts`.** `gpt-4o-mini-tts` er ikke tilgjengelig i
+swedencentral. Stemmene er flerspråklige og leser norsk ut fra teksten; det
+finnes ingen språkparameter. `instructions` støttes ikke av denne modellen.
+Azure AI Speech ville gitt ekte norske nevrale stemmer og SSML — det hører
+hjemme bak sin egen `MediaProvider`-implementasjon, som er hele poenget med
+at det er en trait.
+
+**Ukjent stemme korrigeres stille.** API-et ville svart 400; stemmen er en
+preferanse, ikke selve forespørselen.
+
+**Promptgrensen for tale sjekkes lokalt.** Applikasjonen tillater 4000 tegn,
+tale-endepunktet 4096 — men den sjekken gjøres før kallet, så brukeren får en
+melding hen kan handle på i stedet for en 400 fra Azure.
+
 **ID-tokenet lagres i sesjonen.** Det brukes som `id_token_hint` ved utlogging,
 slik at Entra ID avslutter riktig sesjon uten å vise kontovelger. Det ligger
 utelukkende server-side.
@@ -543,5 +650,5 @@ utelukkende server-side.
 | 2 | Entra ID OIDC-innlogging, sesjon, `require_auth`, `/auth`-ruter | Ferdig |
 | 3 | Statisk UI med Tailwind og HTMX, mock-generering | Ferdig |
 | 4 | Domenemodell, migrasjoner, sqlx-repository, jobbkø, SSE | Ferdig |
-| 5 | Azure-providers for bilde, lyd og video + Blob Storage og SAS | Gjenstår |
+| 5 | Azure-providers for bilde, lyd og video + Blob Storage og SAS | Ferdig (video ikke verifisert, se under) |
 | 6 | Historikk, eksempelgalleri, rate limiting, audit-logg, tester | Gjenstår |
