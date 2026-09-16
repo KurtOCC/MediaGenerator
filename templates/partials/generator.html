@@ -1,0 +1,145 @@
+{% macro chip(tekst) %}
+<button
+  type="button"
+  class="forslag-chip max-w-full truncate rounded-full border border-border bg-surface px-3.5 py-1.5 text-[13px] text-text-muted transition-colors hover:border-accent-hover hover:text-text"
+  data-forslag="{{ tekst }}"
+>{{ tekst }}</button>
+{% endmacro %}
+{% macro medietype(slug, verdi, tittel, undertekst, valgt) %}
+<label class="group relative block cursor-pointer" for="medietype-{{ slug }}">
+  <input
+    type="radio"
+    name="media_type"
+    id="medietype-{{ slug }}"
+    value="{{ verdi }}"
+    class="sr-only"
+    {% if valgt %}checked="checked"{% endif %}
+  />
+  <span
+    class="flex h-full items-center gap-3 rounded-card border border-border bg-surface-2 p-3 transition-colors group-has-[:checked]:border-accent group-has-[:checked]:bg-accent/10 group-has-[:focus-visible]:outline group-has-[:focus-visible]:outline-2 group-has-[:focus-visible]:outline-offset-2 group-has-[:focus-visible]:outline-accent-hover"
+  >
+    <span
+      class="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-surface text-text-muted transition-colors group-has-[:checked]:bg-accent group-has-[:checked]:text-white"
+      aria-hidden="true"
+    >
+      {% if slug == "bilde" %}
+        <svg class="h-[18px] w-[18px]" viewBox="0 0 20 20" fill="none">
+          <rect x="2.5" y="3.5" width="15" height="13" rx="2.5" stroke="currentColor" stroke-width="1.5" />
+          <circle cx="7.5" cy="8" r="1.4" fill="currentColor" />
+          <path d="M3.5 14.5 7.8 10.6l3 2.7 2.4-2 3.3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      {% else if slug == "lyd" %}
+        <svg class="h-[18px] w-[18px]" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <path d="M3 9v2M6.4 6.5v7M9.8 3.5v13M13.2 6v8M16.6 8.5v3" />
+        </svg>
+      {% else %}
+        <svg class="h-[18px] w-[18px]" viewBox="0 0 20 20" fill="none">
+          <rect x="2.5" y="4" width="15" height="12" rx="2.5" stroke="currentColor" stroke-width="1.5" />
+          <path d="M8.6 7.9v4.2l3.6-2.1-3.6-2.1Z" fill="currentColor" />
+        </svg>
+      {% endif %}
+    </span>
+    <span class="min-w-0">
+      <span class="block text-sm font-medium text-text">{{ tittel }}</span>
+      <span class="block truncate text-[11px] text-text-muted">{{ undertekst }}</span>
+    </span>
+  </span>
+</label>
+{% endmacro %}
+
+{#
+  Generator card: prompt, media type, submit, and the suggestion row below it.
+
+  The whole thing is a real <form> posting to /api/generate. HTMX intercepts it
+  and swaps the answer into #resultat; with scripting unavailable the same form
+  still posts and the server answers with the same fragment.
+
+  `maxlength` is deliberately absent from the textarea: the counter has to be
+  able to turn red on overrun, which it never could if the browser silently
+  truncated the paste. The limit is enforced on the server.
+#}
+<form
+  class="generator"
+  id="generator"
+  method="post"
+  action="/api/generate"
+  hx-post="/api/generate"
+  hx-target="#resultat"
+  hx-swap="innerHTML"
+>
+  <div class="rounded-panel border border-border bg-surface p-5 shadow-panel sm:p-6">
+    <label class="sr-only" for="prompt">{{ nb::PROMPT_LABEL }}</label>
+    <div class="relative rounded-card border border-border bg-surface-2 focus-within:border-accent-hover">
+      <textarea
+        id="prompt"
+        name="prompt"
+        rows="5"
+        class="block w-full resize-y rounded-card bg-transparent px-4 pb-9 pt-3.5 text-[15px] leading-relaxed text-text placeholder:text-text-muted focus:outline-none"
+        placeholder="{{ nb::PROMPT_PLACEHOLDER }}"
+        data-maks="{{ max_prompt_chars }}"
+        aria-describedby="tegnteller"
+      ></textarea>
+      <p
+        id="tegnteller"
+        class="pointer-events-none absolute bottom-3 right-4 text-xs tabular-nums text-text-muted"
+      >0/{{ max_prompt_chars }}</p>
+    </div>
+
+    <div class="mt-4 flex flex-col gap-3 lg:flex-row lg:items-stretch">
+      <fieldset class="min-w-0 flex-1">
+        <legend class="sr-only">{{ nb::MEDIA_TYPE_LEGEND }}</legend>
+        {#
+          Native radios, visually hidden. That keeps arrow-key navigation,
+          grouping and announcement exactly as the platform provides them; the
+          card is only a skin over the real control.
+        #}
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {% call medietype("bilde", "image", nb::MEDIA_IMAGE, nb::MEDIA_IMAGE_SUB, true) %}{% endcall %}
+          {% call medietype("lyd", "audio", nb::MEDIA_AUDIO, nb::MEDIA_AUDIO_SUB, false) %}{% endcall %}
+          {% call medietype("video", "video", nb::MEDIA_VIDEO, nb::MEDIA_VIDEO_SUB, false) %}{% endcall %}
+        </div>
+      </fieldset>
+
+      <button
+        type="submit"
+        id="generer"
+        class="flex shrink-0 items-center justify-center gap-2 rounded-card bg-accent px-6 py-3 text-[15px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50 lg:self-stretch"
+      >
+        <span class="knapp-etikett flex items-center gap-2">
+          <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M8 0.8 9.5 5 13.7 6.5 9.5 8 8 12.2 6.5 8 2.3 6.5 6.5 5 8 0.8Z" />
+            <path d="M13 10.2 13.7 12 15.5 12.7 13.7 13.4 13 15.2 12.3 13.4 10.5 12.7 12.3 12 13 10.2Z" opacity="0.7" />
+          </svg>
+          <span>{{ nb::GENERATE }}</span>
+          <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">
+            <path d="M3 8h9m0 0-3.2-3.2M12 8l-3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </span>
+        <span class="knapp-spinner flex items-center gap-2">
+          <svg class="h-4 w-4 animate-spin" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">
+            <circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.8" opacity="0.3" />
+            <path d="M14.2 8A6.2 6.2 0 0 0 8 1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          </svg>
+          <span>{{ nb::GENERATING }}</span>
+        </span>
+      </button>
+    </div>
+  </div>
+
+  {# Suggestions. Which set is visible follows the checked radio, in CSS. #}
+  <div class="mt-4 flex flex-wrap items-center gap-2 px-1">
+    <span class="text-sm text-text-muted">{{ nb::SUGGESTIONS_LABEL }}</span>
+
+    <span class="forslag" data-for="bilde">
+      {% for forslag in nb::SUGGESTIONS_IMAGE %}{% call chip(forslag) %}{% endcall %}{% endfor %}
+    </span>
+    <span class="forslag" data-for="lyd">
+      {% for forslag in nb::SUGGESTIONS_AUDIO %}{% call chip(forslag) %}{% endcall %}{% endfor %}
+    </span>
+    <span class="forslag" data-for="video">
+      {% for forslag in nb::SUGGESTIONS_VIDEO %}{% call chip(forslag) %}{% endcall %}{% endfor %}
+    </span>
+  </div>
+</form>
+
+

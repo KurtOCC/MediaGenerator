@@ -1,0 +1,4 @@
+# Templates live at the repository root, not inside the crate, so that the
+# layout matches the project structure in the specification.
+[general]
+dirs = ["../../templates"]

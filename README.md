@@ -6,7 +6,7 @@ en prompt. Genereringen skjer mot Microsoft Azure AI Foundry / Azure OpenAI.
 
 Hele applikasjonen er skrevet i Rust.
 
-> **Status:** Fase 2 av 6 er ferdig. Se [Leveranseplan](#leveranseplan).
+> **Status:** Fase 3 av 6 er ferdig. Se [Leveranseplan](#leveranseplan).
 
 ---
 
@@ -15,6 +15,8 @@ Hele applikasjonen er skrevet i Rust.
 - [Teknologivalg](#teknologivalg)
 - [Prosjektstruktur](#prosjektstruktur)
 - [Kom i gang lokalt](#kom-i-gang-lokalt)
+- [Innlogging](#innlogging)
+- [Grensesnittet](#grensesnittet)
 - [Miljøvariabler](#miljøvariabler)
 - [Entra ID – app-registrering steg for steg](#entra-id--app-registrering-steg-for-steg)
 - [Azure-ressurser som må opprettes](#azure-ressurser-som-må-opprettes)
@@ -32,9 +34,9 @@ Hele applikasjonen er skrevet i Rust.
 | Språk | Rust stable (utviklet og testet på 1.98.1), edition 2024 |
 | Web | axum 0.8 på tokio |
 | Middleware | tower + tower-http (compression, trace, cors, limits, ServeDir, set-header, timeout) |
-| Templating | askama (typed templates, server-side rendering) – tas i bruk i fase 3 |
-| Frontend | HTMX + minimalt vanilla JS. Ingen React, ingen Node-byggesteg i runtime |
-| Styling | Tailwind CSS via standalone CLI-binær |
+| Templating | askama 0.16 (typed templates, server-side rendering) |
+| Frontend | HTMX 2 + ett lite vanilla-JS-skript. Ingen React, ingen Node i runtime |
+| Styling | Tailwind CSS v4 via standalone CLI-binær (ingen npm) |
 | Database | PostgreSQL via sqlx (Azure Database for PostgreSQL Flexible Server) |
 | Auth | OpenID Connect mot Microsoft Entra ID (`openidconnect` + `oauth2`) |
 | Sesjoner | tower-sessions med PostgreSQL-store, HttpOnly + Secure + SameSite=Lax |
@@ -87,7 +89,7 @@ Avhengighetsretningen er enveis: `domain` kjenner ingen andre crates;
 - På Windows: Visual Studio Build Tools med «Desktop development with C++»
   (MSVC-linker og Windows SDK)
 - PostgreSQL 15+ (fra fase 4)
-- Tailwind standalone CLI (fra fase 3)
+- Tailwind standalone CLI – se [Bygg CSS](#bygg-css). Ingen npm.
 
 ### Oppsett
 
@@ -118,6 +120,26 @@ curl -i http://localhost:8080/ready
 
 Åpne deretter <http://localhost:8080> i en nettleser. Du blir sendt til Entra ID,
 og etter innlogging tilbake til forsiden.
+
+### Bygg CSS
+
+Tailwind kjøres som frittstående binær. Ingen npm, ingen `node_modules`.
+
+```bash
+# Hent binæren én gang (Windows-eksempel; bytt asset-navn for Linux/macOS):
+curl -sL -o tailwindcss.exe \
+  https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-windows-x64.exe
+
+# Bygg:
+./tailwindcss -i assets/css/input.css -o assets/css/app.css --minify
+
+# Eller under utvikling:
+./tailwindcss -i assets/css/input.css -o assets/css/app.css --watch
+```
+
+`assets/css/app.css` er sjekket inn. Det betyr at container-imaget ikke trenger
+noe CSS-verktøy, og at `cargo run` virker rett etter en `git clone`. Husk å
+bygge på nytt og committe når du endrer klasser i en template.
 
 ### Uten PostgreSQL lokalt
 
@@ -150,6 +172,34 @@ HTMX-kall, og vanlig omdirigering ved sidenavigasjon.
 `require_role` er på når `REQUIRED_APP_ROLE` har en verdi, og av når den er tom.
 Rollen godtas både som app-rolle og som gruppemedlemskap, slik at tilgang kan
 styres på begge måter uten kodeendring.
+
+## Grensesnittet
+
+Server-side rendering med askama, HTMX for interaktivitet, og ett lite
+vanilla-JS-skript. Ingen React, ingen Node i runtime.
+
+| Rute | Innhold |
+| --- | --- |
+| `GET /` | Generatoren: hero, promptfelt, medietypevalg, forslag, «Generert» |
+| `GET /historikk` | Brukerens egne genereringer (fylles i fase 6) |
+| `GET /eksempler` | Arkiv over generert innhold (fylles i fase 6) |
+| `POST /api/generate` | Tar imot en generering og svarer med resultatkortet |
+| `GET /api/me` | Innlogget bruker som JSON |
+
+Komponentene ligger som én fil hver under [templates/partials/](templates/partials/)
+uten logikk i seg. Det er det som holder Leptos-alternativet åpent: komponentene
+kan porteres uten at markup må skrives om.
+
+**Uten JavaScript** fungerer fortsatt innlogging, utlogging, navigasjon,
+skjemainnsending og bytte av forslagsrad. Det JS legger til er tegntelleren,
+deaktivert knapp ved tom prompt, forslag som fyller feltet, varselet nederst til
+høyre og «Kopier lenke».
+
+**Tilgjengelighet:** `lang="nb"`, hopp-til-innhold-lenke, synlig fokusmarkering
+overalt, native radioknapper (så piltastnavigasjon og opplesing virker som
+plattformen gjør det), `aria-live` på varsler, og `prefers-reduced-motion`
+respekteres. Kontrasten på dempet tekst mot bakgrunn er ca. 6,3:1 og på blå
+knapp med hvit tekst ca. 5,6:1 — begge over AA-kravet på 4,5:1.
 
 ---
 
@@ -338,6 +388,41 @@ TLS-backend er rustls; `native-tls` finnes ikke i avhengighetstreet.
 **`state` sammenlignes i konstant tid.** En kortsluttende `==` ville lekket hvor
 mange tegn som stemte, til en angriper som måler responstid.
 
+**Tailwind v4 konfigureres i CSS, ikke i JS.** v4 flyttet konfigurasjonen inn i
+`@theme`-blokken, så designtokenene står i
+[assets/css/input.css](assets/css/input.css) og blir til CSS-variabler. De er
+definert to ganger med vilje: `--color-surface` gir Tailwind-klassene
+(`bg-surface`, `border-surface`), og `--surface` er navnet spesifikasjonen
+bruker. Den andre er et alias til den første, så det finnes én kilde.
+
+**`assets/css/app.css` er sjekket inn.** Alternativet var å kjøre Tailwind i
+Dockerfile, som ville lagt et nedlastingssteg inn i hvert image-bygg. Nå trenger
+container-imaget ingen CSS-verktøykjede.
+
+**HTMX ligger i repoet, ikke på CDN.** CSP-en tillater `script-src 'self'` og
+ingenting annet. Å åpne for en CDN bare for å slippe 50 kB i repoet ville vært
+å svekke policyen for å spare plass.
+
+**Ingen webfont lastes.** Inter brukes hvis maskinen har den, ellers systemets
+UI-font. En selvhostet Inter ville lagt på ~100 kB for en forskjell få ville
+lagt merke til, og CSP-en tillater uansett ikke Google Fonts.
+
+**Brukermenyen er `<details>`/`<summary>`.** Det gir tastaturbetjening,
+Escape-lukking og riktig semantikk for skjermlesere uten en linje JavaScript.
+
+**Forslagsraden bytter i CSS, ikke JS.** En `:has()`-regel viser settet som
+hører til den avkryssede radioknappen, så forslagene følger medietypen også når
+JavaScript ikke kjører.
+
+**Tegnfeltet har ikke `maxlength`.** Spesifikasjonen ber om at telleren blir rød
+ved overskridelse, og det kunne den aldri blitt hvis nettleseren kuttet
+innlimt tekst i stillhet. Grensen håndheves på serveren.
+
+**Dobbel-submit-token sjekkes kun på `/api/*`.** De kallene sendes av HTMX, som
+alltid legger på headeren. Utloggingsskjemaet er en vanlig nettleser-POST og
+dekkes av origin-sjekken og `SameSite=Lax`. Spesifikasjonen tillater
+enten-eller; her er begge på der det er praktisk mulig.
+
 **ID-tokenet lagres i sesjonen.** Det brukes som `id_token_hint` ved utlogging,
 slik at Entra ID avslutter riktig sesjon uten å vise kontovelger. Det ligger
 utelukkende server-side.
@@ -350,7 +435,7 @@ utelukkende server-side.
 | --- | --- | --- |
 | 1 | Workspace, axum-server med `/health`, tracing, config, Dockerfile | Ferdig |
 | 2 | Entra ID OIDC-innlogging, sesjon, `require_auth`, `/auth`-ruter | Ferdig |
-| 3 | Statisk UI med Tailwind og HTMX, mock-generering | Gjenstår |
+| 3 | Statisk UI med Tailwind og HTMX, mock-generering | Ferdig |
 | 4 | Domenemodell, migrasjoner, sqlx-repository, jobbkø, SSE | Gjenstår |
 | 5 | Azure-providers for bilde, lyd og video + Blob Storage og SAS | Gjenstår |
 | 6 | Historikk, eksempelgalleri, rate limiting, audit-logg, tester | Gjenstår |

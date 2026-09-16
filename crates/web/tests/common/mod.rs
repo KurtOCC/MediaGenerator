@@ -24,7 +24,9 @@ pub fn test_config() -> AppConfig {
         app_port: 0,
         app_env: Environment::Development,
         rust_log: "warn".to_owned(),
-        assets_dir: "assets".to_owned(),
+        // Tests run with the crate directory as the working directory, so the
+        // relative default would not find the repository-level assets.
+        assets_dir: concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets").to_owned(),
         database_url: Secret::new("postgres://localhost/mediagenerator_test"),
         session_secret: Secret::new("x".repeat(64)),
         session_store: SessionStore::Memory,

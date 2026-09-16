@@ -1,0 +1,55 @@
+{#
+  Page shell. Every full page extends this; HTMX partials do not, so they can
+  be swapped into an existing document.
+
+  All visible text comes from `mediagenerator_domain::i18n::nb`, which the
+  rendering module imports as `nb`. Nothing user-facing is written literally in
+  a template, so the markup can be translated without being touched.
+#}
+<!doctype html>
+<html lang="{{ nb::LANG }}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="{{ nb::APP_DESCRIPTION }}" />
+    <meta name="color-scheme" content="dark" />
+    <title>{% block title %}{{ nb::APP_TITLE }}{% endblock %}</title>
+    <link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/css/app.css" />
+    {# Both scripts are served from this origin: the CSP allows no others. #}
+    <script src="/assets/js/htmx.min.js" defer></script>
+    <script src="/assets/js/app.js" type="module"></script>
+  </head>
+  <body
+    class="min-h-dvh bg-bg text-text antialiased"
+    {#
+      HTMX sends this header on every request it issues. Together with the
+      SameSite=Lax cookie and the Origin check it forms a double-submit token:
+      a cross-site page cannot read the value, so it cannot forge the header.
+    #}
+    hx-headers='{"x-csrf-token": "{{ csrf_token }}"}'
+  >
+    <a class="hopp-lenke rounded-card bg-surface px-4 py-2 text-text" href="#innhold">
+      {{ nb::SKIP_TO_CONTENT }}
+    </a>
+
+    {% include "partials/topbar.html" %}
+
+    <main id="innhold" class="mx-auto w-full max-w-[1120px] px-4 pb-20 sm:px-6">
+      {% block content %}{% endblock %}
+    </main>
+
+    {% include "partials/footer.html" %}
+
+    {#
+      Completion notices land here. aria-live means a screen reader announces
+      them without the focus moving.
+    #}
+    <div
+      id="varsler"
+      class="pointer-events-none fixed bottom-4 right-4 z-40 flex flex-col gap-2"
+      role="status"
+      aria-live="polite"
+    ></div>
+  </body>
+</html>

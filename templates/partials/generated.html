@@ -1,0 +1,66 @@
+{#
+  "Generert": heading on the left, archive link on the right, then a grid that
+  is one column on a phone and three from the small breakpoint up.
+
+  The previews are drawn, not photographed: nothing real has been generated yet,
+  and shipping stock imagery would misrepresent what the tool produces. Phase 6
+  replaces the cards with the user's own most recent output.
+#}
+<section class="mt-14" aria-labelledby="generert-tittel">
+  <div class="flex items-baseline justify-between gap-4">
+    <h2 id="generert-tittel" class="text-[17px] font-semibold text-text">
+      {{ nb::GENERATED_HEADING }}
+    </h2>
+    <a
+      href="/eksempler"
+      class="shrink-0 rounded-card text-sm text-accent-hover hover:underline"
+    >{{ nb::GENERATED_LINK }} <span aria-hidden="true">&rarr;</span></a>
+  </div>
+
+  <ul class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+    {% for eksempel in examples %}
+    <li class="overflow-hidden rounded-panel border border-border bg-surface">
+      <div
+        class="relative flex h-40 items-center justify-center bg-gradient-to-br from-surface-2 to-[#0d1119]"
+      >
+        {% if eksempel.media_type == "audio" %}
+          <svg class="h-14 w-40 text-accent-hover" viewBox="0 0 160 56" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true">
+            <path d="M6 28v4M18 20v16M30 12v32M42 22v12M54 8v40M66 18v20M78 4v48M90 18v20M102 10v36M114 22v12M126 14v28M138 22v12M150 26v4" />
+          </svg>
+        {% else if eksempel.media_type == "video" %}
+          <span class="flex h-14 w-14 items-center justify-center rounded-full bg-white/90" aria-hidden="true">
+            <svg class="ml-1 h-6 w-6 text-[#0a0c12]" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M6 3.5 16 10 6 16.5v-13Z" />
+            </svg>
+          </span>
+        {% else %}
+          <svg class="h-16 w-16 text-text-muted/40" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="2.5" y="4.5" width="19" height="15" rx="3" stroke="currentColor" stroke-width="1.5" />
+            <circle cx="8.5" cy="9.5" r="1.8" fill="currentColor" />
+            <path d="M3.5 17 9 11.5l3.8 3.4 3-2.6 4.7 4.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        {% endif %}
+      </div>
+
+      <div class="flex items-start gap-2.5 border-t border-border p-3.5">
+        <span
+          class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-surface-2 text-text-muted"
+          aria-hidden="true"
+        >
+          {% if eksempel.media_type == "audio" %}
+            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 9v2M6.4 6.5v7M9.8 3.5v13M13.2 6v8M16.6 8.5v3" /></svg>
+          {% else if eksempel.media_type == "video" %}
+            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none"><rect x="2.5" y="4" width="15" height="12" rx="2.5" stroke="currentColor" stroke-width="1.6" /><path d="M8.6 7.9v4.2l3.6-2.1-3.6-2.1Z" fill="currentColor" /></svg>
+          {% else %}
+            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5" stroke="currentColor" stroke-width="1.6" /><circle cx="7.5" cy="8" r="1.3" fill="currentColor" /><path d="M3.5 14.5 7.8 10.6l3 2.7 2.4-2 3.3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          {% endif %}
+        </span>
+        <div class="min-w-0">
+          <p class="text-[11px] uppercase tracking-wide text-text-muted">{{ eksempel.label }}</p>
+          <p class="mt-0.5 truncate text-sm text-text">&laquo;{{ eksempel.prompt }}&raquo;</p>
+        </div>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>

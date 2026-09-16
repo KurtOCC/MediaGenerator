@@ -9,6 +9,7 @@
 pub mod config;
 pub mod error;
 pub mod middleware;
+pub mod render;
 pub mod routes;
 pub mod session;
 pub mod state;
@@ -86,9 +87,15 @@ where
                 .append_index_html_on_directories(false),
         );
 
+    // The double-submit token is checked on /api/* only. Those requests are all
+    // issued by HTMX, which sends the header; the sign-out form is an ordinary
+    // browser POST, covered by the origin check and the SameSite=Lax cookie.
+    let api = routes::api::router().layer(from_fn(middleware::csrf::verify_token));
+
     // `require_auth` is applied last, so it is the outermost of the two and
     // runs first: `require_role` can then rely on the user being present.
-    let protected = routes::me::router()
+    let protected = routes::pages::router()
+        .merge(api)
         .layer(from_fn_with_state(state.role_policy.clone(), require_role))
         .layer(from_fn(require_auth));
 

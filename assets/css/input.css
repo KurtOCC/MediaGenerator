@@ -1,0 +1,133 @@
+/*
+ * Tailwind entry point. Compiled to assets/css/app.css by the standalone CLI:
+ *
+ *   ./tailwindcss -i assets/css/input.css -o assets/css/app.css --minify
+ *
+ * There is no npm anywhere in the build. The compiled file is committed so the
+ * container image needs no CSS toolchain.
+ */
+
+@import "tailwindcss";
+
+/* Tailwind v4 scans for class names from the CSS file outwards; the templates
+   live outside this directory, so they are pointed at explicitly. */
+@source "../../templates";
+@source "../js";
+
+@theme {
+  /* Design tokens. Tailwind emits each of these as a CSS custom property and
+     derives utilities from the namespace, so --color-surface yields bg-surface,
+     text-surface and border-surface. */
+  --color-bg: #0a0c12;
+  --color-surface: #111520;
+  --color-surface-2: #161b27;
+  --color-border: #232a38;
+  --color-text: #e8ebf2;
+  --color-text-muted: #8a93a6;
+  --color-accent: #2563eb;
+  --color-accent-hover: #3b82f6;
+  --color-gradient-from: #a78bfa;
+  --color-gradient-to: #3b82f6;
+
+  /* 12px is the standard radius, 20px is used on the large cards. */
+  --radius-card: 12px;
+  --radius-panel: 20px;
+
+  /* Inter when the system has it, otherwise the platform UI font. No webfont
+     is loaded: the CSP allows no third-party origins, and a self-hosted Inter
+     would add ~100 kB for a difference few would notice. */
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.25);
+}
+
+/*
+ * The names the specification uses, aliased to the Tailwind tokens above so
+ * both spellings resolve to one source of truth.
+ */
+:root {
+  --bg: var(--color-bg);
+  --surface: var(--color-surface);
+  --surface-2: var(--color-surface-2);
+  --border: var(--color-border);
+  --text: var(--color-text);
+  --text-muted: var(--color-text-muted);
+  --accent: var(--color-accent);
+  --accent-hover: var(--color-accent-hover);
+  --gradient-from: var(--color-gradient-from);
+  --gradient-to: var(--color-gradient-to);
+}
+
+@layer base {
+  html {
+    /* Dark by default: tells the browser to render form controls and
+       scrollbars dark too. */
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* One visible focus indicator for everything, meeting WCAG 2.4.7. */
+  :focus-visible {
+    outline: 2px solid var(--accent-hover);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Honour a stated preference for less motion. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /*
+   * Suggestion chips depend on the selected media type. Done in CSS rather
+   * than JavaScript so the chips still switch with scripting unavailable.
+   */
+  .forslag[data-for] {
+    display: none;
+  }
+  .generator:has(#medietype-bilde:checked) .forslag[data-for="bilde"],
+  .generator:has(#medietype-lyd:checked) .forslag[data-for="lyd"],
+  .generator:has(#medietype-video:checked) .forslag[data-for="video"] {
+    display: contents;
+  }
+
+  /*
+   * The submit button swaps between its label and a spinner. HTMX adds
+   * .htmx-request to the form while a request is in flight.
+   */
+  .generator.htmx-request .knapp-etikett {
+    display: none;
+  }
+  .generator:not(.htmx-request) .knapp-spinner {
+    display: none;
+  }
+
+  /* Screen-reader-only text that becomes visible on keyboard focus. */
+  .hopp-lenke {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 50;
+  }
+  .hopp-lenke:focus {
+    left: 1rem;
+    top: 1rem;
+  }
+}

@@ -1,15 +1,17 @@
 //! Cross-site request forgery protection for state-changing requests.
 //!
-//! Two independent defences are in play:
+//! Three independent defences are in play:
 //!
 //! * `SameSite=Lax` on the session cookie, which keeps the browser from
-//!   attaching it to a cross-site `POST` at all, and
-//! * the origin check in this module, which rejects any state-changing request
-//!   whose `Origin` (or, failing that, `Referer`) is not this application.
+//!   attaching it to a cross-site `POST` at all,
+//! * [`verify_origin`], which rejects any state-changing request whose `Origin`
+//!   (or, failing that, `Referer`) is not this application, and
+//! * [`verify_token`], a double-submit token checked on `/api/*`.
 //!
 //! The origin check is the one that still holds if a browser ever relaxes its
-//! `SameSite` handling. A double-submit token is added in phase 3, when the
-//! first real forms appear; for `POST /auth/logout` the pair above is enough.
+//! `SameSite` handling; the token is the one that holds if a reverse proxy ever
+//! strips `Origin`. The sign-out form is an ordinary browser `POST` and relies
+//! on the first two.
 
 use axum::{
     Json,
@@ -20,6 +22,91 @@ use axum::{
 };
 use mediagenerator_domain::{ErrorCode, i18n::nb};
 use serde::Serialize;
+
+/// Session key holding the per-session CSRF token.
+const TOKEN_KEY: &str = "csrf.token";
+
+/// Header HTMX sends the token in.
+const TOKEN_HEADER: &str = "x-csrf-token";
+
+/// Returns the CSRF token for this session, creating one if needed.
+///
+/// The token is rendered into the page and sent back on every HTMX request. A
+/// cross-site page cannot read it, so it cannot forge the header — the
+/// double-submit half of the protection, on top of the origin check below.
+///
+/// # Errors
+///
+/// Returns an error when the session store cannot be read or written.
+pub async fn token(
+    session: &tower_sessions::Session,
+) -> Result<String, tower_sessions::session::Error> {
+    if let Some(existing) = session.get::<String>(TOKEN_KEY).await? {
+        return Ok(existing);
+    }
+    let fresh = uuid::Uuid::new_v4().simple().to_string();
+    session.insert(TOKEN_KEY, &fresh).await?;
+    Ok(fresh)
+}
+
+/// Rejects state-changing API requests whose token is missing or wrong.
+///
+/// Applied to `/api/*` only: those are all issued by HTMX, which attaches the
+/// header. The sign-out form is an ordinary browser POST and is covered by
+/// [`verify_origin`] together with the `SameSite=Lax` cookie.
+pub async fn verify_token(request: Request, next: Next) -> Response {
+    if is_safe(request.method()) {
+        return next.run(request).await;
+    }
+
+    let Some(session) = request
+        .extensions()
+        .get::<tower_sessions::Session>()
+        .cloned()
+    else {
+        tracing::error!("verify_token ran without a session layer");
+        return reject();
+    };
+
+    let expected = match session.get::<String>(TOKEN_KEY).await {
+        Ok(Some(expected)) => expected,
+        Ok(None) => {
+            tracing::warn!("state-changing request against a session with no CSRF token");
+            return reject();
+        }
+        Err(error) => {
+            tracing::error!(%error, "could not read the CSRF token from the session");
+            return reject();
+        }
+    };
+
+    let presented = request
+        .headers()
+        .get(TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+
+    if constant_time_eq(presented.as_bytes(), expected.as_bytes()) {
+        next.run(request).await
+    } else {
+        tracing::warn!(
+            path = %request.uri().path(),
+            "rejected a state-changing request with a missing or wrong CSRF token"
+        );
+        reject()
+    }
+}
+
+/// Compares two byte strings without leaking their contents through timing.
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
+}
 
 /// The origin every state-changing request must come from.
 #[derive(Debug, Clone)]

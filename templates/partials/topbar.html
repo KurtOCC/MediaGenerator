@@ -1,0 +1,90 @@
+{#
+  Top bar: brand on the left, user menu on the right, transparent over the dark
+  page background.
+
+  The menu is a <details>/<summary> pair rather than a scripted dropdown. That
+  gives keyboard operation, Escape-to-close and correct semantics for assistive
+  technology for free, and it keeps working when JavaScript does not.
+#}
+<header class="w-full">
+  <div class="mx-auto flex w-full max-w-[1120px] items-center justify-between px-4 py-5 sm:px-6">
+    <a
+      href="/"
+      class="flex items-center gap-2.5 rounded-card font-semibold text-text"
+      aria-label="{{ nb::BRAND }}"
+    >
+      {# Wave mark in the brand gradient. #}
+      <svg
+        class="h-8 w-8 shrink-0"
+        viewBox="0 0 32 32"
+        fill="none"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <defs>
+          <linearGradient id="bolge" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+            <stop stop-color="var(--gradient-from)" />
+            <stop offset="1" stop-color="var(--gradient-to)" />
+          </linearGradient>
+        </defs>
+        <path
+          d="M3 20.5c3.2 0 3.2-3.5 6.4-3.5s3.2 3.5 6.4 3.5 3.2-3.5 6.4-3.5 3.2 3.5 6.4 3.5"
+          stroke="url(#bolge)"
+          stroke-width="2.6"
+          stroke-linecap="round"
+        />
+        <path
+          d="M3 13.5c3.2 0 3.2-3.5 6.4-3.5s3.2 3.5 6.4 3.5 3.2-3.5 6.4-3.5 3.2 3.5 6.4 3.5"
+          stroke="url(#bolge)"
+          stroke-width="2.6"
+          stroke-linecap="round"
+          opacity="0.55"
+        />
+      </svg>
+      <span class="text-[15px]">{{ nb::BRAND }}</span>
+    </a>
+
+    <details class="group relative" id="brukermeny">
+      <summary
+        class="flex cursor-pointer list-none items-center gap-2.5 rounded-card px-2 py-1.5 hover:bg-surface"
+        aria-label="{{ nb::NAV_USER_MENU_LABEL }}"
+      >
+        <span
+          class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[13px] font-semibold text-text"
+          aria-hidden="true"
+        >{{ initials }}</span>
+        <span class="hidden text-sm text-text sm:inline">{{ display_name }}</span>
+        <svg
+          class="h-4 w-4 text-text-muted transition-transform group-open:rotate-180"
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </summary>
+
+      <div
+        class="absolute right-0 z-30 mt-2 w-56 overflow-hidden rounded-card border border-border bg-surface shadow-panel"
+      >
+        <a
+          href="/historikk"
+          class="block px-4 py-2.5 text-sm text-text hover:bg-surface-2"
+        >{{ nb::NAV_MY_HISTORY }}</a>
+
+        {#
+          Sign-out is a POST so it cannot be triggered by a link, an image or a
+          prefetch. The Origin check and the SameSite=Lax cookie cover it.
+        #}
+        <form method="post" action="/auth/logout" class="border-t border-border">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <button
+            type="submit"
+            class="w-full px-4 py-2.5 text-left text-sm text-text hover:bg-surface-2"
+          >{{ nb::NAV_LOGOUT }}</button>
+        </form>
+      </div>
+    </details>
+  </div>
+</header>

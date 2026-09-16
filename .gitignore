@@ -1,6 +1,5 @@
 /target
 .env
 *.log
-assets/css/app.css
 tailwindcss*
 node_modules/

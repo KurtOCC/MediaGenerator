@@ -203,3 +203,61 @@ async fn health_and_ready_stay_reachable_without_a_session() {
     assert_eq!(get("/health").await.status(), StatusCode::OK);
     assert_eq!(get("/ready").await.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn generate_requires_a_session() {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/generate")
+        .header(header::ORIGIN, "http://localhost:8080")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("prompt=test&media_type=image"))
+        .expect("request builder produced an invalid request");
+
+    let response = send(request).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json(response).await["message"], nb::ERR_UNAUTHENTICATED);
+}
+
+#[tokio::test]
+async fn the_static_pages_are_all_behind_the_guard() {
+    for path in ["/", "/historikk", "/eksempler"] {
+        assert_eq!(
+            get(path).await.status(),
+            StatusCode::SEE_OTHER,
+            "{path} should require a session"
+        );
+    }
+}
+
+#[tokio::test]
+async fn assets_are_served_without_a_session() {
+    // The stylesheet and the scripts must load before anyone has signed in,
+    // otherwise the sign-in page itself would be unstyled.
+    for path in [
+        "/assets/css/app.css",
+        "/assets/js/htmx.min.js",
+        "/assets/js/app.js",
+    ] {
+        let response = get(path).await;
+        assert_eq!(response.status(), StatusCode::OK, "{path} should be served");
+    }
+}
+
+#[tokio::test]
+async fn assets_are_not_cached_by_the_api_cache_control() {
+    let response = get("/assets/css/app.css").await;
+    assert!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .is_some_and(|value| value.as_bytes().starts_with(b"public")),
+        "static assets should be cacheable"
+    );
+
+    let health = get("/health").await;
+    assert!(
+        health.headers().get(header::CACHE_CONTROL).is_none(),
+        "probe responses must not inherit the asset cache policy"
+    );
+}

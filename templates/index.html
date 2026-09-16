@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "partials/hero.html" %}
+{% include "partials/generator.html" %}
+
+{# Filled by HTMX when a generation finishes. #}
+<div id="resultat"></div>
+
+{% include "partials/generated.html" %}
+{% endblock %}
