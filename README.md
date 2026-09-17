@@ -6,7 +6,8 @@ en prompt. Genereringen skjer mot Microsoft Azure AI Foundry / Azure OpenAI.
 
 Hele applikasjonen er skrevet i Rust.
 
-> **Status:** Alle seks faser er ferdige. Se [Leveranseplan](#leveranseplan).
+> **Status:** Alle seks faser er ferdige, og applikasjonen kjører i Azure.
+> Se [Deploy](#deploy) og [Leveranseplan](#leveranseplan).
 
 ---
 
@@ -26,6 +27,7 @@ Hele applikasjonen er skrevet i Rust.
 - [Entra ID – app-registrering steg for steg](#entra-id--app-registrering-steg-for-steg)
 - [Azure-ressurser som må opprettes](#azure-ressurser-som-må-opprettes)
 - [Docker](#docker)
+- [Deploy](#deploy)
 - [Kvalitetsporter](#kvalitetsporter)
 - [Dokumenterte valg](#dokumenterte-valg)
 - [Leveranseplan](#leveranseplan)
@@ -502,6 +504,77 @@ docker run --rm -p 8080:8080 --env-file .env mediagenerator:dev
 Imaget bygges i flere trinn med `cargo-chef`, slik at avhengighetslaget ikke
 invalideres av en kildeendring. Runtime er `debian-slim`, kjører som bruker
 `app` (uid 10001) og har en `HEALTHCHECK` mot `/health`.
+
+---
+
+## Deploy
+
+Kjorer i Azure Container Apps i `rg-mediagenerator-dev` (norwayeast):
+
+| Ressurs | Navn |
+| --- | --- |
+| Container App | `mediagenerator` |
+| URL | <https://mediagenerator.redriver-792657e8.norwayeast.azurecontainerapps.io> |
+| Container Apps-miljo | `cae-mediagenerator` |
+| Container Registry | `acrmediagen31drue` |
+| Key Vault | `kv-mediagen-p1qrak` |
+| Log Analytics | `log-mediagenerator` |
+
+### Hvordan hemmeligheter naas
+
+Container App-en har en **systemtildelt managed identity** med fire roller:
+`AcrPull`, `Key Vault Secrets User`, `Storage Blob Data Contributor` og
+`Cognitive Services OpenAI User`.
+
+`DATABASE_URL`, `SESSION_SECRET` og `AZURE_CLIENT_SECRET` er **Key
+Vault-referanser**, ikke verdier. De star aldri i Container App-ressursen og
+leses aldri av CLI-en; identiteten henter dem ved oppstart.
+
+Klientshemmeligheten trengs fortsatt fordi OIDC-appen er en konfidensiell
+web-klient. Managed Identity erstatter den bare pa dataplanet — Foundry og
+Blob Storage nas uten noen hemmelighet i det hele tatt.
+
+### Deploy en ny versjon
+
+```bash
+mkdir -p /tmp/mgbuild && git archive --format=tar HEAD | tar -x -C /tmp/mgbuild
+(cd /tmp/mgbuild && az acr build --registry acrmediagen31drue \
+   --image mediagenerator:$(git rev-parse --short HEAD) \
+   --file Dockerfile --platform linux/amd64 .)
+
+az containerapp update -n mediagenerator -g rg-mediagenerator-dev \
+  --image acrmediagen31drue.azurecr.io/mediagenerator:$(git rev-parse --short HEAD)
+```
+
+### To ting som krever Entra-rettigheter
+
+Begge trenger **Application Administrator** (eller eierskap pa
+app-registreringen). Azure-RBAC som Owner pa abonnementet holder ikke —
+app-registreringer ligger i Entra ID, ikke i abonnementet.
+
+**1. Redirect-URI for produksjon.** Uten denne feiler innlogging pa
+produksjons-URL-en med `AADSTS50011`. Entra-portalen → App registrations →
+Mediagenerator → Authentication:
+
+```
+Redirect URI:               https://mediagenerator.redriver-792657e8.norwayeast.azurecontainerapps.io/auth/callback
+Front-channel logout URL:   https://mediagenerator.redriver-792657e8.norwayeast.azurecontainerapps.io/auth/logout
+```
+
+**2. Tjenesteprinsipal for CI.** Deploy-jobben hopper over seg selv til
+repoet har `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` og `AZURE_SUBSCRIPTION_ID`
+som secrets, og `ACR_NAME`, `CONTAINER_APP_NAME`, `RESOURCE_GROUP` som
+variables. Prinsipalen trenger `Contributor` pa `rg-mediagenerator-dev` og
+en federated credential mot
+`repo:KurtOCC/MediaGenerator:ref:refs/heads/main`.
+
+### Kjent begrensning: en replika
+
+`--max-replicas 1`. Jobbkoen og SSE-strommen lever i prosessen: med flere
+replikaer kunne nettleseren fatt SSE fra en replika mens jobben kjorte pa en
+annen, og kortet ville forst oppdatert seg ved neste sidelasting.
+Horisontal skalering krever en delt hendelseskanal — Postgres LISTEN/NOTIFY
+er det naturlige neste steget. For et internt verktoy holder en replika.
 
 ---
 
