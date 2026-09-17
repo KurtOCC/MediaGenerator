@@ -13,6 +13,7 @@ use askama::Template;
 use axum::{
     Extension, Json, Router,
     extract::{Form, Path, State},
+    http::StatusCode,
     response::{
         Redirect, Sse,
         sse::{Event, KeepAlive},
@@ -49,6 +50,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/jobs/{id}", get(job_status))
         .route("/api/jobs/{id}/card", get(job_card))
         .route("/api/assets/{id}", get(asset))
+        .route("/api/jobs/{id}/synlighet", post(set_visibility))
+        .route("/api/jobs/{id}/slett", post(delete_job))
 }
 
 /// Returns the streaming routes, which must not be subject to the timeout.
@@ -87,6 +90,49 @@ struct GenerateForm {
     prompt: String,
     /// Which kind of media to produce.
     media_type: MediaType,
+
+    /// Image size, e.g. `1024x1024`. Only submitted for images.
+    #[serde(default)]
+    image_size: Option<String>,
+    /// Image quality: `low`, `medium` or `high`.
+    #[serde(default)]
+    image_quality: Option<String>,
+    /// Speech voice name.
+    #[serde(default)]
+    audio_voice: Option<String>,
+    /// Video length in seconds.
+    #[serde(default)]
+    video_seconds: Option<u32>,
+    /// Video frame size, e.g. `1280x720`.
+    #[serde(default)]
+    video_size: Option<String>,
+}
+
+impl GenerateForm {
+    /// Builds the provider parameters for the selected media type.
+    ///
+    /// Only the fields belonging to the chosen type are read. The browser
+    /// does not submit controls inside a hidden ancestor, so the others are
+    /// normally absent anyway — but a hand-crafted POST could carry all of
+    /// them, and silently using a video length on an image would be worse
+    /// than ignoring it.
+    ///
+    /// Values are not validated here. Each provider clamps or falls back to
+    /// its own default, which keeps the rules next to the API that imposes
+    /// them.
+    fn parameters(&self) -> serde_json::Value {
+        match self.media_type {
+            MediaType::Image => serde_json::json!({
+                "size": self.image_size,
+                "quality": self.image_quality,
+            }),
+            MediaType::Audio => serde_json::json!({ "voice": self.audio_voice }),
+            MediaType::Video => serde_json::json!({
+                "n_seconds": self.video_seconds,
+                "size": self.video_size,
+            }),
+        }
+    }
 }
 
 /// Accepts a generation request and returns the card for the queued job.
@@ -109,8 +155,7 @@ async fn generate(
         &NewJob {
             user_id,
             media_type: form.media_type,
-            // Provider parameters (size, quality, voice) are added in phase 5.
-            parameters: serde_json::json!({}),
+            parameters: form.parameters(),
             prompt,
         },
     )
@@ -431,4 +476,75 @@ mod tests {
         // Clock adjustments can make completed_at precede started_at.
         assert_eq!(format_elapsed(time::Duration::milliseconds(-10)), "0,0 s");
     }
+}
+
+/// Form body for the archive actions.
+#[derive(Debug, Deserialize)]
+struct VisibilityForm {
+    /// `true` to hide from the shared archive, `false` to show it again.
+    hidden: bool,
+}
+
+/// Hides or shows one of the caller's own generations in the shared archive.
+///
+/// Hidden is not private: the owner still sees it in their own history. It only
+/// means "do not show this to colleagues".
+async fn set_visibility(
+    State(state): State<AppState>,
+    session: Session,
+    Extension(user): Extension<SessionUser>,
+    Path(id): Path<Uuid>,
+    Form(form): Form<VisibilityForm>,
+) -> Result<StatusCode, AppError> {
+    let user_id = local_user_id(&state.db, &session, &user).await?;
+
+    jobs::set_hidden(&state.db, id, user_id, form.hidden)
+        .await
+        .map_err(storage_error)?;
+
+    tracing::info!(%user_id, job_id = %id, hidden = form.hidden, "archive visibility changed");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Deletes one of the caller's own generations, media and all.
+///
+/// Irreversible, and deliberately separate from hiding. The blobs go first:
+/// deleting the row cascades the asset records away, and with them the only
+/// record of where the files live.
+async fn delete_job(
+    State(state): State<AppState>,
+    session: Session,
+    Extension(user): Extension<SessionUser>,
+    client: ClientInfo,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let user_id = local_user_id(&state.db, &session, &user).await?;
+
+    let paths = jobs::delete_for_user(&state.db, id, user_id)
+        .await
+        .map_err(storage_error)?;
+
+    for path in &paths {
+        if let Err(error) = state.blobs.delete(path).await {
+            // The row is gone either way. Leaving one orphaned blob behind is
+            // better than reporting a failure for work that did happen; the
+            // retention sweep will not find it, so it is logged loudly.
+            tracing::error!(%error, path, job_id = %id, "could not delete the blob");
+        }
+    }
+
+    let entry = AuditEntry {
+        user_id: Some(user_id),
+        action: AuditAction::GenerationDeleted,
+        entity: "job",
+        entity_id: Some(id.to_string()),
+        ip: client.ip.clone(),
+        user_agent: client.user_agent.clone(),
+    };
+    if let Err(error) = audit::record(&state.db, &entry).await {
+        tracing::error!(%error, job_id = %id, "could not write the audit entry");
+    }
+
+    tracing::info!(%user_id, job_id = %id, blobs = paths.len(), "generation deleted");
+    Ok(StatusCode::NO_CONTENT)
 }

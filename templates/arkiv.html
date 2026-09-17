@@ -78,9 +78,35 @@
           <p class="text-[11px] text-text-muted">{{ entry.created }}</p>
         </div>
         <p class="mt-1 line-clamp-2 text-sm text-text">&laquo;{{ entry.prompt }}&raquo;</p>
-        <p class="mt-2 text-[11px] text-text-muted">
-          {% if entry.own %}{{ nb::BY_YOU }}{% else %}{{ entry.owner_name }}{% endif %}
-        </p>
+        <div class="mt-2 flex items-center justify-between gap-2">
+          <p class="text-[11px] text-text-muted">
+            {% if entry.own %}{{ nb::BY_YOU }}{% else %}{{ entry.owner_name }}{% endif %}
+            {% if entry.hidden %}&middot; {{ nb::HIDDEN_MARKER }}{% endif %}
+          </p>
+
+          {#
+            Only on your own work. Hiding keeps it out of the shared archive
+            but leaves it in your history; deleting is irreversible, so it
+            asks first. Both are POSTs, so they carry the CSRF token and
+            cannot be triggered by a link or a prefetch.
+          #}
+          {% if entry.own %}
+          <div class="flex shrink-0 gap-1">
+            <button
+              type="button"
+              class="kort-handling skjul-veksle"
+              data-jobb="{{ entry.id }}"
+              data-skjult="{% if entry.hidden %}true{% else %}false{% endif %}"
+            >{% if entry.hidden %}{{ nb::SHOW_TO_OTHERS }}{% else %}{{ nb::HIDE_FROM_OTHERS }}{% endif %}</button>
+            <button
+              type="button"
+              class="kort-handling slett-jobb"
+              data-jobb="{{ entry.id }}"
+              data-bekreft="{{ nb::CONFIRM_DELETE }}"
+            >{{ nb::DELETE }}</button>
+          </div>
+          {% endif %}
+        </div>
       </div>
     </li>
     {% endfor %}

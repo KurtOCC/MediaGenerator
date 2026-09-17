@@ -128,6 +128,11 @@ where
         .layer(session_layer)
         .layer(from_fn_with_state(origin, middleware::csrf::verify_origin))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
+        // Inside the compression layer, deliberately. Placed outside it, this
+        // would be handed a gzipped body it cannot parse, and would silently
+        // pass the JSON through — which is exactly what happened the first
+        // time it was wired up.
+        .layer(from_fn(middleware::error_page::render_html_errors))
         .layer(CompressionLayer::new())
         // No cross-origin caller is expected: the UI is served from the same
         // origin. An empty policy means the browser blocks everything else.
@@ -139,10 +144,6 @@ where
         .layer(option_layer(
             middleware::security_headers::strict_transport_security(environment),
         ))
-        // Outside the routes but inside the correlation span: it needs the
-        // correlation id, and it must see the error responses every handler
-        // and guard produces.
-        .layer(from_fn(middleware::error_page::render_html_errors))
         .layer(TraceLayer::new_for_http())
         .layer(SetSensitiveRequestHeadersLayer::new([
             header::AUTHORIZATION,

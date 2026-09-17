@@ -18,6 +18,13 @@ const TEKST = {
   kopiert: "Lenken er kopiert",
   ferdig: "Genereringen er ferdig",
   feilet: "Genereringen feilet",
+  skjult: "Skjult for andre",
+  vist: "Synlig for andre igjen",
+  slettet: "Slettet",
+  skjulForAndre: "Skjul for andre",
+  visForAndre: "Vis for andre",
+  bekreftSlett: "Slette denne for godt? Det kan ikke angres.",
+  handlingFeilet: "Handlingen kunne ikke fullfores",
 };
 
 /**
@@ -51,24 +58,6 @@ function koblePromptTeller(skjema) {
   oppdater();
 }
 
-/**
- * Makes a suggestion chip fill the prompt field.
- *
- * @param {HTMLFormElement} skjema
- */
-function kobleForslag(skjema) {
-  const felt = skjema.querySelector("#prompt");
-  if (!felt) return;
-
-  skjema.addEventListener("click", (hendelse) => {
-    const chip = hendelse.target.closest(".forslag-chip");
-    if (!chip) return;
-
-    felt.value = chip.dataset.forslag ?? "";
-    felt.dispatchEvent(new Event("input", { bubbles: true }));
-    felt.focus();
-  });
-}
 
 /**
  * Shows a short notice in the bottom right corner.
@@ -216,12 +205,74 @@ function kobleResultat(rot, valg = {}) {
   });
 }
 
+/**
+ * Wires the hide and delete buttons on the archive and history pages.
+ *
+ * Both are POSTs carrying the CSRF token, so neither can be triggered by a
+ * link or a prefetch. Delete asks first, because it cannot be undone.
+ */
+function kobleArkivhandlinger() {
+  const token = document.body.dataset.csrf ?? "";
+
+  document.addEventListener("click", async (hendelse) => {
+    const skjul = hendelse.target.closest(".skjul-veksle");
+    const slett = hendelse.target.closest(".slett-jobb");
+    const knapp = skjul ?? slett;
+    if (!knapp) return;
+
+    const jobbId = knapp.dataset.jobb;
+    if (!jobbId) return;
+
+    if (slett && !window.confirm(slett.dataset.bekreft ?? TEKST.bekreftSlett)) return;
+
+    const skalSkjules = skjul ? skjul.dataset.skjult !== "true" : false;
+    const url = skjul
+      ? `/api/jobs/${encodeURIComponent(jobbId)}/synlighet`
+      : `/api/jobs/${encodeURIComponent(jobbId)}/slett`;
+
+    knapp.disabled = true;
+    try {
+      const svar = await fetch(url, {
+        method: "POST",
+        headers: {
+          "x-csrf-token": token,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: skjul ? `hidden=${skalSkjules}` : "",
+      });
+
+      if (!svar.ok) {
+        knapp.disabled = false;
+        visVarsel(TEKST.handlingFeilet);
+        return;
+      }
+
+      if (slett) {
+        // Remove the card rather than reloading: the page may be deep in a
+        // filtered, paged listing the user would lose.
+        knapp.closest("li")?.remove();
+        visVarsel(TEKST.slettet);
+        return;
+      }
+
+      skjul.dataset.skjult = String(skalSkjules);
+      skjul.textContent = skalSkjules ? TEKST.visForAndre : TEKST.skjulForAndre;
+      knapp.disabled = false;
+      visVarsel(skalSkjules ? TEKST.skjult : TEKST.vist);
+    } catch {
+      knapp.disabled = false;
+      visVarsel(TEKST.handlingFeilet);
+    }
+  });
+}
+
 function start() {
   const skjema = document.querySelector("#generator");
   if (skjema) {
     koblePromptTeller(skjema);
-    kobleForslag(skjema);
   }
+
+  kobleArkivhandlinger();
 
   // A job already running when the page loaded is rendered by the server;
   // pick it up so the page keeps following it across a reload.

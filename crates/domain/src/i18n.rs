@@ -64,32 +64,59 @@ pub mod nb {
     /// Primary submit button while a job is running.
     pub const GENERATING: &str = "Genererer…";
 
-    /// Leading label of the suggestion chip row.
-    pub const SUGGESTIONS_LABEL: &str = "Forslag:";
+    // ----- Model options ---------------------------------------------------
+    /// Heading above the per-media-type options.
+    pub const OPTIONS_LABEL: &str = "Valg";
 
-    /// Suggestion chips shown when "Bilde" is selected.
-    pub const SUGGESTIONS_IMAGE: [&str; 4] = [
-        "Et moderne kontormiljø",
-        "Logo med Oslofjord-tema",
-        "Solnedgang over Oslofjorden",
-        "Illustrasjon til intranettet",
-    ];
+    /// Image: label for the size control.
+    pub const IMAGE_SIZE: &str = "Størrelse";
+    /// Image: square.
+    pub const IMAGE_SIZE_SQUARE: &str = "Kvadratisk";
+    /// Image: landscape.
+    pub const IMAGE_SIZE_LANDSCAPE: &str = "Liggende";
+    /// Image: portrait.
+    pub const IMAGE_SIZE_PORTRAIT: &str = "Stående";
+    /// Image: label for the quality control.
+    pub const IMAGE_QUALITY: &str = "Kvalitet";
+    /// Image quality: quickest.
+    pub const QUALITY_LOW: &str = "Lav (raskest)";
+    /// Image quality: balanced.
+    pub const QUALITY_MEDIUM: &str = "Middels";
+    /// Image quality: slowest and most detailed.
+    pub const QUALITY_HIGH: &str = "Høy (tar lengst tid)";
 
-    /// Suggestion chips shown when "Lyd" is selected.
-    pub const SUGGESTIONS_AUDIO: [&str; 4] = [
-        "En vennlig norsk stemme som ønsker velkommen",
-        "En kort telefonsvarer på norsk",
-        "Rolig bakgrunnsmusikk",
-        "Lydeffekt: varsel om ny melding",
-    ];
+    /// Audio: label for the voice control.
+    pub const AUDIO_VOICE: &str = "Stemme";
+    /// Audio: voice descriptions. The names are the API values and are not
+    /// translated; the parenthetical is what tells a user them apart.
+    pub const VOICE_NOVA: &str = "Nova – lys og vennlig";
+    /// Voice: alloy.
+    pub const VOICE_ALLOY: &str = "Alloy – nøytral";
+    /// Voice: echo.
+    pub const VOICE_ECHO: &str = "Echo – rolig";
+    /// Voice: fable.
+    pub const VOICE_FABLE: &str = "Fable – fortellende";
+    /// Voice: onyx.
+    pub const VOICE_ONYX: &str = "Onyx – dyp";
+    /// Voice: shimmer.
+    pub const VOICE_SHIMMER: &str = "Shimmer – varm";
 
-    /// Suggestion chips shown when "Video" is selected.
-    pub const SUGGESTIONS_VIDEO: [&str; 4] = [
-        "En kort introduksjonsvideo",
-        "Velkomstvideo for nye ansatte",
-        "Animert logo med bølgemotiv",
-        "Klipp fra en fjord i soloppgang",
-    ];
+    /// Video: label for the length control.
+    pub const VIDEO_LENGTH: &str = "Lengde";
+    /// Video: four seconds.
+    pub const VIDEO_4S: &str = "4 sekunder";
+    /// Video: eight seconds.
+    pub const VIDEO_8S: &str = "8 sekunder";
+    /// Video: twelve seconds.
+    pub const VIDEO_12S: &str = "12 sekunder";
+    /// Video: label for the frame format control.
+    pub const VIDEO_FORMAT: &str = "Format";
+    /// Video: landscape frame.
+    pub const VIDEO_LANDSCAPE: &str = "Liggende";
+    /// Video: portrait frame.
+    pub const VIDEO_PORTRAIT: &str = "Stående";
+    /// Video: square frame.
+    pub const VIDEO_SQUARE: &str = "Kvadratisk";
 
     /// Skip link shown to keyboard users at the top of every page.
     pub const SKIP_TO_CONTENT: &str = "Hopp til hovedinnhold";
@@ -173,6 +200,24 @@ pub mod nb {
         "Ingenting å vise her ennå. Prøv et annet filter, eller generer noe nytt.";
     /// Shown in place of a preview when the job produced no file.
     pub const NO_PREVIEW: &str = "Ingen forhåndsvisning";
+    /// Marker on a card the owner has hidden from the shared archive.
+    pub const HIDDEN_MARKER: &str = "skjult for andre";
+    /// Action: hide this from colleagues.
+    pub const HIDE_FROM_OTHERS: &str = "Skjul for andre";
+    /// Action: show it again.
+    pub const SHOW_TO_OTHERS: &str = "Vis for andre";
+    /// Action: delete permanently.
+    pub const DELETE: &str = "Slett";
+    /// Confirmation before an irreversible delete.
+    pub const CONFIRM_DELETE: &str =
+        "Slette denne for godt? Både beskrivelsen og filen fjernes, og det kan ikke angres.";
+    /// Toast after hiding.
+    pub const HIDDEN_DONE: &str = "Skjult for andre";
+    /// Toast after unhiding.
+    pub const SHOWN_DONE: &str = "Synlig for andre igjen";
+    /// Toast after deleting.
+    pub const DELETED_DONE: &str = "Slettet";
+
     /// Attribution for the viewer's own work.
     pub const BY_YOU: &str = "Generert av deg";
     /// Accessible label for the pagination controls.

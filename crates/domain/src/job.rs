@@ -217,6 +217,8 @@ pub struct JobListItem {
     pub asset_id: Option<Uuid>,
     /// Display name of whoever generated it.
     pub owner_name: String,
+    /// True when the owner has hidden this from the shared archive.
+    pub hidden: bool,
     /// True when the signed-in user owns this job.
     pub owned_by_viewer: bool,
 }
@@ -228,6 +230,11 @@ pub struct ListFilter {
     pub user_id: Option<Uuid>,
     /// Restrict to one media type.
     pub media_type: Option<MediaType>,
+    /// Exclude jobs the owner has hidden from the shared archive.
+    ///
+    /// Off for the owner's own views: hiding something from colleagues
+    /// should not hide it from yourself.
+    pub exclude_hidden: bool,
     /// Exclude anything that did not produce media.
     pub only_succeeded: bool,
     /// Newest first when true, oldest first when false.

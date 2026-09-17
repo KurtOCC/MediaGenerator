@@ -285,3 +285,90 @@ async fn an_asset_cannot_be_reached_without_a_session() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(json(response).await["message"], nb::ERR_UNAUTHENTICATED);
 }
+
+/// The `Accept` header a browser sends on a top-level navigation.
+const BROWSER_ACCEPT: &str =
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,*/*;q=0.8";
+
+#[tokio::test]
+async fn a_browser_navigation_gets_an_html_error_page_not_json() {
+    // `Accept-Encoding` matters: the compression layer wraps the body, and an
+    // error-page middleware placed outside it would be handed gzip and quietly
+    // pass the JSON through. That is exactly what shipped the first time.
+    let request = Request::builder()
+        .uri("/finnes-ikke")
+        .header(header::ACCEPT, BROWSER_ACCEPT)
+        .header(header::ACCEPT_ENCODING, "gzip, deflate, br")
+        .body(Body::empty())
+        .expect("request builder produced an invalid request");
+
+    let response = send(request).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        content_type.starts_with("text/html"),
+        "expected an HTML page, got {content_type}"
+    );
+
+    // The body itself is checked without Accept-Encoding: the compression
+    // layer sits outside this one and will gzip the rendered page, which is
+    // correct and which the browser handles.
+    let plain = Request::builder()
+        .uri("/finnes-ikke")
+        .header(header::ACCEPT, BROWSER_ACCEPT)
+        .body(Body::empty())
+        .expect("request builder produced an invalid request");
+
+    let response = send(plain).await;
+    let bytes = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("body should be readable");
+    let html = String::from_utf8(bytes.to_vec()).expect("the page should be UTF-8");
+
+    assert!(html.contains("<!doctype html>"));
+    assert!(html.contains(nb::ERR_NOT_FOUND));
+    assert!(html.contains("lang=\"nb\""));
+}
+
+#[tokio::test]
+async fn a_forbidden_sign_in_is_a_page_and_not_raw_json() {
+    // What the first real user saw: a black page of JSON after being refused
+    // the app role.
+    let request = Request::builder()
+        .uri("/auth/callback?error=access_denied")
+        .header(header::ACCEPT, BROWSER_ACCEPT)
+        .header(header::ACCEPT_ENCODING, "gzip")
+        .body(Body::empty())
+        .expect("request builder produced an invalid request");
+
+    let response = send(request).await;
+    assert!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/html")),
+        "a failed sign-in must render as a page"
+    );
+}
+
+#[tokio::test]
+async fn the_api_still_answers_in_json_even_for_a_browser_accept_header() {
+    // The negotiation must not leak into the API: HTMX and fetch() both send
+    // browser-ish Accept headers.
+    let request = Request::builder()
+        .uri("/api/me")
+        .header(header::ACCEPT, BROWSER_ACCEPT)
+        .body(Body::empty())
+        .expect("request builder produced an invalid request");
+
+    let response = send(request).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json(response).await["code"], "unauthenticated");
+}

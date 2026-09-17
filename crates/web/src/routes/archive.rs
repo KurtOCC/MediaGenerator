@@ -173,6 +173,8 @@ pub struct Entry {
     pub own: bool,
     /// Link to the asset, empty when there is none.
     pub asset_url: String,
+    /// True when the owner has hidden this from the shared archive.
+    pub hidden: bool,
     /// True when the job failed.
     pub failed: bool,
     /// Norwegian failure message, when it failed.
@@ -201,6 +203,7 @@ impl Entry {
                 .asset_id
                 .map(|id| format!("/api/assets/{id}"))
                 .unwrap_or_default(),
+            hidden: item.hidden,
             failed,
             error_message: item
                 .status
@@ -314,6 +317,8 @@ async fn render(
         user_id: own_only.then_some(viewer),
         media_type: query.media_type(),
         only_succeeded,
+        // Someone else's hidden work is not shown; your own always is.
+        exclude_hidden: !own_only,
         newest_first: query.newest_first(),
         limit: PAGE_SIZE,
         offset: query.page() * PAGE_SIZE,
@@ -397,6 +402,7 @@ mod tests {
             asset_id: Some(Uuid::nil()),
             owner_name: "Hans Kristiansen".to_owned(),
             owned_by_viewer: false,
+            hidden: false,
         })];
 
         let current = query("eier=alle&type=lyd");
@@ -553,6 +559,7 @@ mod tests {
             asset_id: Some(Uuid::nil()),
             owner_name: "Hans Kristiansen".to_owned(),
             owned_by_viewer: true,
+            hidden: false,
         };
 
         let entry = Entry::from_item(item);
@@ -576,6 +583,7 @@ mod tests {
             asset_id: None,
             owner_name: "Hans Kristiansen".to_owned(),
             owned_by_viewer: true,
+            hidden: false,
         };
 
         let entry = Entry::from_item(item);

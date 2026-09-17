@@ -13,34 +13,19 @@
       class="flex items-center gap-2.5 rounded-card font-semibold text-text"
       aria-label="{{ nb::BRAND }}"
     >
-      {# Wave mark in the brand gradient. #}
-      <svg
-        class="h-8 w-8 shrink-0"
-        viewBox="0 0 32 32"
-        fill="none"
+      {#
+        The Oslofjord wave. A raster logo rather than inline SVG: this is the
+        file the brand actually ships, and redrawing it by hand would drift
+        from it the first time it is updated.
+      #}
+      <img
+        src="/assets/icons/logo_uten_tekst.png"
+        alt=""
+        class="h-7 w-auto shrink-0"
+        width="2338"
+        height="744"
         aria-hidden="true"
-        focusable="false"
-      >
-        <defs>
-          <linearGradient id="bolge" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-            <stop stop-color="var(--gradient-from)" />
-            <stop offset="1" stop-color="var(--gradient-to)" />
-          </linearGradient>
-        </defs>
-        <path
-          d="M3 20.5c3.2 0 3.2-3.5 6.4-3.5s3.2 3.5 6.4 3.5 3.2-3.5 6.4-3.5 3.2 3.5 6.4 3.5"
-          stroke="url(#bolge)"
-          stroke-width="2.6"
-          stroke-linecap="round"
-        />
-        <path
-          d="M3 13.5c3.2 0 3.2-3.5 6.4-3.5s3.2 3.5 6.4 3.5 3.2-3.5 6.4-3.5 3.2 3.5 6.4 3.5"
-          stroke="url(#bolge)"
-          stroke-width="2.6"
-          stroke-linecap="round"
-          opacity="0.55"
-        />
-      </svg>
+      />
       <span class="text-[15px]">{{ nb::BRAND }}</span>
     </a>
 

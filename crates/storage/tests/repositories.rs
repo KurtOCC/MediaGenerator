@@ -481,6 +481,7 @@ fn filter(user_id: Option<Uuid>) -> ListFilter {
         user_id,
         media_type: None,
         only_succeeded: false,
+        exclude_hidden: false,
         newest_first: true,
         limit: 50,
         offset: 0,
@@ -656,5 +657,103 @@ async fn retention_finds_the_blob_paths_before_the_rows_are_deleted() {
             .await
             .expect("the lookup should run");
         assert!(!after.iter().any(|path| path.contains(&job.id.to_string())));
+    });
+}
+
+#[tokio::test]
+async fn only_the_owner_can_hide_a_generation() {
+    with_database!(|db| {
+        let owner = a_user(&db).await;
+        let stranger = a_user(&db).await;
+        let job = a_typed_job(&db, owner.id, MediaType::Image, "min").await;
+
+        // A stranger gets "not found", not "forbidden": that the row exists is
+        // itself information.
+        let denied = jobs::set_hidden(&db, job.id, stranger.id, true).await;
+        assert!(matches!(denied, Err(StorageError::NotFound)));
+
+        jobs::set_hidden(&db, job.id, owner.id, true)
+            .await
+            .expect("the owner should be able to hide it");
+
+        let listed = jobs::list(&db, &filter(Some(owner.id)), owner.id)
+            .await
+            .expect("the listing should run");
+        assert!(
+            listed
+                .iter()
+                .find(|item| item.id == job.id)
+                .is_some_and(|item| item.hidden)
+        );
+    });
+}
+
+#[tokio::test]
+async fn hiding_removes_it_from_the_shared_view_but_not_from_your_own() {
+    with_database!(|db| {
+        let owner = a_user(&db).await;
+        let job = a_typed_job(&db, owner.id, MediaType::Image, "skjult").await;
+        succeed_with_asset(&db, job.id).await;
+        jobs::set_hidden(&db, job.id, owner.id, true)
+            .await
+            .expect("should hide");
+
+        // The shared archive, as a colleague sees it.
+        let mut shared = filter(None);
+        shared.only_succeeded = true;
+        shared.exclude_hidden = true;
+        let seen_by_others = jobs::list(&db, &shared, owner.id)
+            .await
+            .expect("the listing should run");
+        assert!(!seen_by_others.iter().any(|item| item.id == job.id));
+
+        // The owner's own view still has it. Hiding is about colleagues, not
+        // about hiding your work from yourself.
+        let mut own = filter(Some(owner.id));
+        own.only_succeeded = true;
+        own.exclude_hidden = false;
+        let seen_by_owner = jobs::list(&db, &own, owner.id)
+            .await
+            .expect("the listing should run");
+        assert!(seen_by_owner.iter().any(|item| item.id == job.id));
+    });
+}
+
+#[tokio::test]
+async fn deleting_returns_the_blob_paths_so_the_files_can_follow() {
+    with_database!(|db| {
+        let owner = a_user(&db).await;
+        let stranger = a_user(&db).await;
+        let job = a_typed_job(&db, owner.id, MediaType::Image, "slettes").await;
+        succeed_with_asset(&db, job.id).await;
+
+        let denied = jobs::delete_for_user(&db, job.id, stranger.id).await;
+        assert!(matches!(denied, Err(StorageError::NotFound)));
+
+        let paths = jobs::delete_for_user(&db, job.id, owner.id)
+            .await
+            .expect("the owner should be able to delete it");
+
+        // Without the paths the blobs would be orphaned: the cascade has just
+        // removed the only record of where they live.
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].contains(&job.id.to_string()));
+
+        assert!(jobs::by_id_for_user(&db, job.id, owner.id).await.is_err());
+    });
+}
+
+#[tokio::test]
+async fn deleting_the_same_job_twice_is_reported_as_missing() {
+    with_database!(|db| {
+        let owner = a_user(&db).await;
+        let job = a_typed_job(&db, owner.id, MediaType::Image, "dobbel").await;
+
+        jobs::delete_for_user(&db, job.id, owner.id)
+            .await
+            .expect("the first delete should succeed");
+
+        let again = jobs::delete_for_user(&db, job.id, owner.id).await;
+        assert!(matches!(again, Err(StorageError::NotFound)));
     });
 }

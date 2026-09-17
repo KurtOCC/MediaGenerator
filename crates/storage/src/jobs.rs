@@ -295,7 +295,7 @@ pub async fn delete_older_than(db: &Database, days: i32) -> Result<u64, StorageE
 /// would otherwise be twenty-one queries.
 const LIST_COLUMNS: &str = "j.id, j.user_id, j.media_type::text as media_type, j.prompt, \
                             j.status, j.error_code, j.error_message, j.created_at, \
-                            a.id as asset_id, u.display_name as owner_name";
+                            j.hidden, a.id as asset_id, u.display_name as owner_name";
 
 /// Builds the `where` clause and records which parameter each filter took.
 ///
@@ -314,6 +314,10 @@ fn list_predicates(filter: &ListFilter) -> (String, bool, bool) {
     let by_media = filter.media_type.is_some();
     if by_media {
         clauses.push(format!("j.media_type = ${next}::media_type"));
+    }
+
+    if filter.exclude_hidden {
+        clauses.push("not j.hidden".to_owned());
     }
 
     if filter.only_succeeded {
@@ -341,6 +345,7 @@ fn to_list_item(row: &PgRow, viewer: Uuid) -> Result<JobListItem, StorageError> 
         created_at: row.try_get("created_at").map_err(map_sqlx)?,
         asset_id: row.try_get("asset_id").map_err(map_sqlx)?,
         owner_name: row.try_get("owner_name").map_err(map_sqlx)?,
+        hidden: row.try_get("hidden").map_err(map_sqlx)?,
         owned_by_viewer: user_id == viewer,
     })
 }
@@ -418,4 +423,80 @@ pub async fn count(db: &Database, filter: &ListFilter) -> Result<i64, StorageErr
 
     let row = query.fetch_one(db).await.map_err(map_sqlx)?;
     row.try_get("antall").map_err(map_sqlx)
+}
+
+/// Hides or unhides one of the caller's own jobs.
+///
+/// The `user_id` in the `where` clause is the access check: hiding is only ever
+/// something you do to your own work.
+///
+/// # Errors
+///
+/// Returns [`StorageError::NotFound`] when the job does not exist or belongs to
+/// someone else.
+pub async fn set_hidden(
+    db: &Database,
+    id: Uuid,
+    user_id: Uuid,
+    hidden: bool,
+) -> Result<(), StorageError> {
+    let result = sqlx::query("update jobs set hidden = $3 where id = $1 and user_id = $2")
+        .bind(id)
+        .bind(user_id)
+        .bind(hidden)
+        .execute(db)
+        .await
+        .map_err(map_sqlx)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StorageError::NotFound);
+    }
+    Ok(())
+}
+
+/// Deletes one of the caller's own jobs, returning the blob paths it owned.
+///
+/// The paths come back so the caller can remove the files: the cascade takes
+/// the asset rows with the job, and with them the only record of where the
+/// media lives.
+///
+/// # Errors
+///
+/// Returns [`StorageError::NotFound`] when the job does not exist or belongs to
+/// someone else.
+pub async fn delete_for_user(
+    db: &Database,
+    id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<String>, StorageError> {
+    // Read the paths first, still scoped by owner.
+    let rows = sqlx::query(
+        "select a.blob_path
+         from assets a
+         join jobs j on j.id = a.job_id
+         where j.id = $1 and j.user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+    .map_err(map_sqlx)?;
+
+    let paths: Vec<String> = rows
+        .iter()
+        .map(|row| row.try_get("blob_path").map_err(map_sqlx))
+        .collect::<Result<_, _>>()?;
+
+    let result = sqlx::query("delete from jobs where id = $1 and user_id = $2")
+        .bind(id)
+        .bind(user_id)
+        .execute(db)
+        .await
+        .map_err(map_sqlx)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StorageError::NotFound);
+    }
+
+    Ok(paths)
 }

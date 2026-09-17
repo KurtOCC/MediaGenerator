@@ -12,7 +12,7 @@
 use askama::Template;
 use axum::{Extension, Router, extract::State, routing::get};
 use mediagenerator_auth::SessionUser;
-use mediagenerator_domain::i18n::nb;
+use mediagenerator_domain::{ListFilter, i18n::nb};
 use tower_sessions::Session;
 
 use mediagenerator_storage::jobs;
@@ -31,36 +31,23 @@ pub fn router() -> Router<AppState> {
 }
 
 /// One card in the "Generert" grid.
+///
+/// Built from the user's own finished work. There is no placeholder content:
+/// an empty account shows an empty section, not invented examples.
 #[derive(Debug, Clone)]
-pub struct Example {
-    /// `image`, `audio` or `video`; selects the icon and the preview.
+pub struct Recent {
+    /// `image`, `audio` or `video`, for the icon and the preview element.
     pub media_type: &'static str,
-    /// Norwegian label shown above the prompt.
+    /// Norwegian label for the media type.
     pub label: &'static str,
-    /// The prompt that produced the example, shown in guillemets.
-    pub prompt: &'static str,
+    /// The prompt, shown in guillemets.
+    pub prompt: String,
+    /// Link to the asset.
+    pub asset_url: String,
 }
 
-/// Placeholder cards until phase 6 reads the user's own recent output.
-fn examples() -> Vec<Example> {
-    vec![
-        Example {
-            media_type: "image",
-            label: nb::MEDIA_IMAGE,
-            prompt: "Solnedgang over Oslofjorden",
-        },
-        Example {
-            media_type: "audio",
-            label: nb::MEDIA_AUDIO,
-            prompt: "En vennlig telefonsvarer på norsk",
-        },
-        Example {
-            media_type: "video",
-            label: nb::MEDIA_VIDEO,
-            prompt: "En kort velkomstvideo for nye ansatte",
-        },
-    ]
-}
+/// How many finished generations the front page shows.
+const RECENT_COUNT: i64 = 3;
 
 /// The front page.
 #[derive(Template)]
@@ -84,8 +71,9 @@ struct IndexTemplate {
     /// Empty unless the user is close to the limit: a counter that is always
     /// there is noise, and one that appears only as a refusal is a surprise.
     rate_limit_hint: String,
-    /// Cards in the "Generert" grid.
-    examples: Vec<Example>,
+    /// The user's three most recent finished generations. Empty when there
+    /// are none, and the section is then not rendered at all.
+    recent: Vec<Recent>,
 }
 
 /// Renders the generator.
@@ -97,6 +85,7 @@ async fn index(
     let csrf_token = csrf_token(&session).await?;
     let active_job = active_job_card(&state, &session, &user).await;
     let rate_limit_hint = rate_limit_hint(&state, &session, &user).await;
+    let recent = recent_generations(&state, &session, &user).await;
 
     Ok(Page(IndexTemplate {
         csrf_token,
@@ -105,7 +94,7 @@ async fn index(
         max_prompt_chars: state.config.max_prompt_chars,
         rate_limit_hint,
         active_job,
-        examples: examples(),
+        recent,
     }))
 }
 
@@ -123,6 +112,49 @@ async fn rate_limit_hint(state: &AppState, session: &Session, user: &SessionUser
         Ok(Some(left)) if left <= HINT_THRESHOLD => nb::generations_remaining(left),
         _ => String::new(),
     }
+}
+
+/// Returns the user's most recent finished generations, newest first.
+///
+/// A failure here degrades to an empty section rather than an error page: not
+/// being able to show past work is no reason to withhold the generator.
+async fn recent_generations(
+    state: &AppState,
+    session: &Session,
+    user: &SessionUser,
+) -> Vec<Recent> {
+    let Ok(user_id) = local_user_id(&state.db, session, user).await else {
+        return Vec::new();
+    };
+
+    let filter = ListFilter {
+        user_id: Some(user_id),
+        media_type: None,
+        only_succeeded: true,
+        // Your own work, hidden or not: hiding is about colleagues.
+        exclude_hidden: false,
+        newest_first: true,
+        limit: RECENT_COUNT,
+        offset: 0,
+    };
+
+    let items = jobs::list(&state.db, &filter, user_id)
+        .await
+        .inspect_err(|error| tracing::error!(%error, "could not read recent generations"))
+        .unwrap_or_default();
+
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let asset_id = item.asset_id?;
+            Some(Recent {
+                media_type: item.media_type.as_str(),
+                label: item.media_type.label(),
+                prompt: item.prompt,
+                asset_url: format!("/api/assets/{asset_id}"),
+            })
+        })
+        .collect()
 }
 
 /// Renders the card for the user's most recent unfinished job, if any.
@@ -168,8 +200,29 @@ mod tests {
             max_prompt_chars: 4000,
             rate_limit_hint: String::new(),
             active_job: None,
-            examples: examples(),
+            recent: Vec::new(),
         }
+    }
+
+    #[test]
+    fn the_generated_section_appears_only_with_real_work_in_it() {
+        let mut template = index_template("Hans Kristiansen");
+        template.recent = vec![Recent {
+            media_type: "audio",
+            label: nb::MEDIA_AUDIO,
+            prompt: "En vennlig norsk stemme".to_owned(),
+            asset_url: "/api/assets/abc".to_owned(),
+        }];
+
+        let html = template.render().expect("the front page should render");
+
+        assert!(html.contains(nb::GENERATED_HEADING));
+        assert!(html.contains(nb::GENERATED_LINK));
+        assert!(html.contains("En vennlig norsk stemme"));
+        // Real media, from our own asset route — never a provider URL.
+        assert!(html.contains("/api/assets/abc"));
+        // No invented examples survive anywhere.
+        assert!(!html.contains("Solnedgang over Oslofjorden"));
     }
 
     #[test]
@@ -206,11 +259,16 @@ mod tests {
         }
 
         // Suggestions, generated section and footer
-        assert!(html.contains(nb::SUGGESTIONS_LABEL));
-        assert!(html.contains(nb::SUGGESTIONS_IMAGE[0]));
-        assert!(html.contains(nb::SUGGESTIONS_VIDEO[0]));
-        assert!(html.contains(nb::GENERATED_HEADING));
-        assert!(html.contains(nb::GENERATED_LINK));
+        // The suggestion chips are gone; the per-media-type options replaced
+        // them, and all three sets are rendered with CSS choosing one.
+        assert!(html.contains(nb::OPTIONS_LABEL));
+        assert!(html.contains(nb::IMAGE_QUALITY));
+        assert!(html.contains(nb::AUDIO_VOICE));
+        assert!(html.contains(nb::VIDEO_LENGTH));
+        assert!(html.contains(nb::VIDEO_4S));
+        // The "Generert" section is absent with nothing to show: a gallery of
+        // work you did not make is worse than no gallery.
+        assert!(!html.contains(nb::GENERATED_HEADING));
         assert!(html.contains(nb::FOOTER));
     }
 

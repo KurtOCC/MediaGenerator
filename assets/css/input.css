@@ -96,27 +96,49 @@
 
 @layer components {
   /*
-   * Suggestion chips depend on the selected media type. Done in CSS rather
-   * than JavaScript so the chips still switch with scripting unavailable.
+   * Which option set is shown follows the checked media type, in CSS, so
+   * the controls switch without JavaScript. A hidden set is display:none,
+   * and the browser does not submit controls inside a hidden ancestor.
    */
-  .forslag[data-for] {
+  .valg {
     display: none;
   }
-  .generator:has(#medietype-bilde:checked) .forslag[data-for="bilde"],
-  .generator:has(#medietype-lyd:checked) .forslag[data-for="lyd"],
-  .generator:has(#medietype-video:checked) .forslag[data-for="video"] {
-    display: contents;
+  .generator:has(#medietype-bilde:checked) .valg[data-for="bilde"],
+  .generator:has(#medietype-lyd:checked) .valg[data-for="lyd"],
+  .generator:has(#medietype-video:checked) .valg[data-for="video"] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+
+  .velger {
+    @apply rounded-card border border-border bg-surface-2 px-3 py-2 text-sm
+      text-text;
   }
 
   /*
    * The submit button swaps between its label and a spinner. HTMX adds
    * .htmx-request to the form while a request is in flight.
+   *
+   * Display is set here and nowhere else. A Tailwind `flex` utility on the
+   * spans would win the cascade — utilities are layered after components —
+   * and both would show at once, which is what shipped the first time.
    */
-  .generator.htmx-request .knapp-etikett {
-    display: none;
+  .knapp-generer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
-  .generator:not(.htmx-request) .knapp-spinner {
+  .knapp-etikett,
+  .knapp-spinner {
     display: none;
+    align-items: center;
+  }
+  .generator:not(.htmx-request) .knapp-etikett {
+    display: flex;
+  }
+  .generator.htmx-request .knapp-spinner {
+    display: flex;
   }
 
   /* Filter and sort controls. Links, not buttons: they change the URL. */
@@ -129,6 +151,13 @@
   }
 
   /* Pagination. The disabled variant is a span, so it is not focusable. */
+  /* Small actions on an archive card: hide, delete. */
+  .kort-handling {
+    @apply rounded-full border border-border px-2.5 py-1 text-[11px]
+      text-text-muted transition-colors hover:border-accent-hover hover:text-text
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
   .sidelenke {
     @apply rounded-card border border-border bg-surface px-4 py-2 text-sm text-text
       transition-colors hover:border-accent-hover;

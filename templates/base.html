@@ -14,7 +14,7 @@
     <meta name="description" content="{{ nb::APP_DESCRIPTION }}" />
     <meta name="color-scheme" content="dark" />
     <title>{% block title %}{{ nb::APP_TITLE }}{% endblock %}</title>
-    <link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/assets/icons/logo_uten_tekst.png" type="image/png" />
     <link rel="stylesheet" href="/assets/css/app.css" />
     {# Both scripts are served from this origin: the CSP allows no others. #}
     <script src="/assets/js/htmx.min.js" defer></script>
@@ -28,6 +28,8 @@
       a cross-site page cannot read the value, so it cannot forge the header.
     #}
     hx-headers='{"x-csrf-token": "{{ csrf_token }}"}'
+    {# The script reads the same token for its own fetch() calls. #}
+    data-csrf="{{ csrf_token }}"
   >
     <a class="hopp-lenke rounded-card bg-surface px-4 py-2 text-text" href="#innhold">
       {{ nb::SKIP_TO_CONTENT }}

@@ -22,6 +22,8 @@ pub enum AuditAction {
     GenerationSucceeded,
     /// A generation failed.
     GenerationFailed,
+    /// A user deleted one of their own generations.
+    GenerationDeleted,
     /// A stored asset was handed out as a time-limited link.
     AssetAccessed,
 }
@@ -35,6 +37,7 @@ impl AuditAction {
             Self::GenerationRequested => "generation_requested",
             Self::GenerationSucceeded => "generation_succeeded",
             Self::GenerationFailed => "generation_failed",
+            Self::GenerationDeleted => "generation_deleted",
             Self::AssetAccessed => "asset_accessed",
         }
     }
