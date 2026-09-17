@@ -79,7 +79,6 @@ pub mod nb {
     /// Explains what a reference image does.
     pub const REFERENCE_IMAGE_HINT: &str =
         "Valgfritt. Last opp et bilde modellen skal ta utgangspunkt i.";
-    /// Shown when the uploaded reference is too large.
     /// Explains what a reference image does for video.
     ///
     /// Different from the image case: Sora continues *from* the picture rather
@@ -147,7 +146,6 @@ pub mod nb {
     pub const VIDEO_LANDSCAPE: &str = "Liggende";
     /// Video: portrait frame.
     pub const VIDEO_PORTRAIT: &str = "Stående";
-    /// Video: square frame.
     /// Video: wide landscape frame.
     pub const VIDEO_LANDSCAPE_WIDE: &str = "Liggende, bred";
     /// Video: tall portrait frame.
@@ -236,6 +234,12 @@ pub mod nb {
     /// Shown in place of a preview when the job produced no file.
     pub const NO_PREVIEW: &str = "Ingen forhåndsvisning";
     /// Marker on a card the owner has hidden from the shared archive.
+    /// Accessible label on a tile that opens full screen.
+    pub const OPEN_FULLSCREEN: &str = "Åpne i fullskjerm";
+    /// Accessible label of the full-screen viewer.
+    pub const FULLSCREEN_LABEL: &str = "Fullskjermvisning";
+    /// Close button.
+    pub const CLOSE: &str = "Lukk";
     pub const HIDDEN_MARKER: &str = "skjult for andre";
     /// Action: hide this from colleagues.
     pub const HIDE_FROM_OTHERS: &str = "Skjul for andre";

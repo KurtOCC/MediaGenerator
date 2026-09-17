@@ -57,20 +57,45 @@
   <ul class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
     {% for entry in entries %}
     <li class="overflow-hidden rounded-panel border border-border bg-surface">
-      <div class="relative flex h-44 items-center justify-center bg-gradient-to-br from-surface-2 to-[#0d1119]">
-        {% if entry.failed %}
-          <p class="px-6 text-center text-xs text-text-muted">{{ entry.error_message }}</p>
-        {% else if entry.asset_url == "" %}
-          <p class="px-6 text-center text-xs text-text-muted">{{ nb::NO_PREVIEW }}</p>
-        {% else if entry.media_type == "image" %}
-          {# Lazy: a page of 24 images should not all load at once. #}
-          <img class="h-full w-full object-cover" src="{{ entry.asset_url }}" alt="{{ entry.prompt }}" loading="lazy" />
-        {% else if entry.media_type == "audio" %}
+      {#
+        The tile is a link to the file. JavaScript intercepts the click and
+        opens it full screen instead; without JavaScript the link still works
+        and shows the media on its own.
+      #}
+      {% if entry.failed %}
+        <div class="flex h-44 items-center justify-center bg-gradient-to-br from-surface-2 to-[#0d1119] px-6 text-center">
+          <p class="text-xs text-text-muted">{{ entry.error_message }}</p>
+        </div>
+      {% else if entry.asset_url == "" %}
+        <div class="flex h-44 items-center justify-center bg-gradient-to-br from-surface-2 to-[#0d1119]">
+          <p class="text-xs text-text-muted">{{ nb::NO_PREVIEW }}</p>
+        </div>
+      {% else if entry.media_type == "audio" %}
+        <div class="flex h-44 items-center justify-center bg-gradient-to-br from-surface-2 to-[#0d1119]">
           <audio controls preload="none" class="w-[88%]" src="{{ entry.asset_url }}"></audio>
-        {% else %}
-          <video controls preload="none" playsinline class="h-full w-full object-cover" src="{{ entry.asset_url }}"></video>
-        {% endif %}
-      </div>
+        </div>
+      {% else %}
+        <a
+          class="fullskjerm-lenke relative flex h-44 items-center justify-center bg-gradient-to-br from-surface-2 to-[#0d1119]"
+          href="{{ entry.asset_url }}"
+          data-fullskjerm="{{ entry.media_type }}"
+          data-tekst="{{ entry.prompt }}"
+          aria-label="{{ nb::OPEN_FULLSCREEN }}"
+        >
+          {% if entry.media_type == "video" %}
+            {#
+              A still with a play badge, not an inline player: a player would
+              swallow the click that is meant to open the clip full screen.
+            #}
+            <video class="h-full w-full object-cover" preload="metadata" muted playsinline src="{{ entry.asset_url }}#t=0.1"></video>
+            <span class="pointer-events-none absolute flex h-12 w-12 items-center justify-center rounded-full bg-black/55" aria-hidden="true">
+              <svg class="ml-0.5 h-5 w-5 text-white" viewBox="0 0 20 20" fill="currentColor"><path d="M6 3.5 16 10 6 16.5v-13Z" /></svg>
+            </span>
+          {% else %}
+            <img class="h-full w-full object-cover" src="{{ entry.asset_url }}" alt="{{ entry.prompt }}" loading="lazy" />
+          {% endif %}
+        </a>
+      {% endif %}
 
       <div class="border-t border-border p-3.5">
         <div class="flex items-center justify-between gap-2">
@@ -90,8 +115,11 @@
             asks first. Both are POSTs, so they carry the CSRF token and
             cannot be triggered by a link or a prefetch.
           #}
-          {% if entry.own %}
           <div class="flex shrink-0 gap-1">
+            {% if entry.asset_url != "" %}
+            <a class="kort-handling" href="{{ entry.asset_url }}?nedlasting=1">{{ nb::DOWNLOAD }}</a>
+            {% endif %}
+            {% if entry.own %}
             <button
               type="button"
               class="kort-handling skjul-veksle"
@@ -104,8 +132,8 @@
               data-jobb="{{ entry.id }}"
               data-bekreft="{{ nb::CONFIRM_DELETE }}"
             >{{ nb::DELETE }}</button>
+            {% endif %}
           </div>
-          {% endif %}
         </div>
       </div>
     </li>

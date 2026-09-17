@@ -287,6 +287,60 @@ function kobleFilvelger(skjema) {
   });
 }
 
+/**
+ * Opens generated media full screen when a tile is clicked.
+ *
+ * The tile is a link to the file, so without this the browser simply shows
+ * the media on its own page. All this adds is doing it in place.
+ */
+function kobleFullskjerm() {
+  const dialog = document.querySelector("#fullskjerm");
+  if (!dialog || typeof dialog.showModal !== "function") return;
+
+  const innhold = dialog.querySelector(".fullskjerm-innhold");
+  const tekst = dialog.querySelector(".fullskjerm-tekst");
+
+  const lukk = () => {
+    // Emptying it stops a video that is still playing.
+    innhold.replaceChildren();
+    dialog.close();
+  };
+
+  dialog.querySelector("[data-lukk]")?.addEventListener("click", lukk);
+  dialog.addEventListener("close", () => innhold.replaceChildren());
+  dialog.addEventListener("click", (hendelse) => {
+    // A click on the backdrop lands on the dialog itself.
+    if (hendelse.target === dialog) lukk();
+  });
+
+  document.addEventListener("click", (hendelse) => {
+    const lenke = hendelse.target.closest("[data-fullskjerm]");
+    if (!lenke) return;
+
+    // Let a modified click through: opening in a new tab is a reasonable
+    // thing to want, and the link already points at the file.
+    if (hendelse.metaKey || hendelse.ctrlKey || hendelse.shiftKey) return;
+    hendelse.preventDefault();
+
+    const type = lenke.dataset.fullskjerm;
+    const kilde = lenke.getAttribute("href");
+    const element = document.createElement(type === "video" ? "video" : "img");
+    element.src = kilde;
+
+    if (type === "video") {
+      element.controls = true;
+      element.autoplay = true;
+      element.playsInline = true;
+    } else {
+      element.alt = lenke.dataset.tekst ?? "";
+    }
+
+    innhold.replaceChildren(element);
+    tekst.textContent = lenke.dataset.tekst ?? "";
+    dialog.showModal();
+  });
+}
+
 function start() {
   const skjema = document.querySelector("#generator");
   if (skjema) {
@@ -295,6 +349,7 @@ function start() {
   }
 
   kobleArkivhandlinger();
+  kobleFullskjerm();
 
   // A job already running when the page loaded is rendered by the server;
   // pick it up so the page keeps following it across a reload.

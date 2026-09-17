@@ -47,6 +47,21 @@
       Completion notices land here. aria-live means a screen reader announces
       them without the focus moving.
     #}
+    {#
+      Full-screen viewer. A native <dialog>, so Escape closes it, focus is
+      trapped, and the backdrop comes from the platform rather than from a
+      hand-rolled overlay.
+    #}
+    <dialog id="fullskjerm" class="fullskjerm" aria-label="{{ nb::FULLSCREEN_LABEL }}">
+      <button type="button" class="fullskjerm-lukk" data-lukk aria-label="{{ nb::CLOSE }}">
+        <svg class="h-5 w-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="m5 5 10 10M15 5 5 15" />
+        </svg>
+      </button>
+      <div class="fullskjerm-innhold"></div>
+      <p class="fullskjerm-tekst"></p>
+    </dialog>
+
     <div
       id="varsler"
       class="pointer-events-none fixed bottom-4 right-4 z-40 flex flex-col gap-2"

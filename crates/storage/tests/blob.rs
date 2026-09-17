@@ -47,7 +47,7 @@ async fn media_survives_a_round_trip_through_a_signed_link() {
         .expect("upload should succeed");
 
     let url = store
-        .read_url(&path, Duration::from_secs(300))
+        .read_url(&path, Duration::from_secs(300), None)
         .await
         .expect("a SAS should be issued");
 
@@ -88,7 +88,7 @@ async fn the_container_is_not_readable_without_a_signature() {
     // The same URL without the query string. If this succeeds, the container is
     // public and every generated file is world-readable.
     let url = store
-        .read_url(&path, Duration::from_secs(300))
+        .read_url(&path, Duration::from_secs(300), None)
         .await
         .expect("a SAS should be issued");
     let unsigned = url.split('?').next().expect("a URL before the query");
@@ -123,7 +123,7 @@ async fn an_expired_link_stops_working() {
     // One second, then wait it out. This is what makes SAS_TTL_MINUTES a real
     // control rather than a setting nobody has checked.
     let url = store
-        .read_url(&path, Duration::from_secs(1))
+        .read_url(&path, Duration::from_secs(1), None)
         .await
         .expect("a SAS should be issued");
 
@@ -158,4 +158,53 @@ async fn deleting_a_missing_blob_is_not_an_error() {
         .delete(&path)
         .await
         .expect("delete should tolerate a missing blob");
+}
+
+#[tokio::test]
+async fn a_download_link_tells_the_browser_to_save_the_file() {
+    let Some(store) = store() else {
+        eprintln!("skipped: {ACCOUNT_VAR} is not set");
+        return;
+    };
+
+    let path = format!("test/{}.txt", Uuid::new_v4());
+    store
+        .upload(&path, "text/plain", b"last ned meg".to_vec())
+        .await
+        .expect("upload should succeed");
+
+    // The `download` attribute on a link is ignored cross-origin, and the SAS
+    // points at another host. Content-Disposition in the signature is what
+    // actually makes the browser save rather than navigate — and it is signed,
+    // so it cannot be bolted onto the query afterwards.
+    let url = store
+        .read_url(&path, Duration::from_secs(300), Some("bilde-1.png"))
+        .await
+        .expect("a SAS should be issued");
+
+    let response = reqwest::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .expect("the signed link should be reachable");
+
+    assert!(
+        response.status().is_success(),
+        "signed link was rejected with {}",
+        response.status()
+    );
+
+    let disposition = response
+        .headers()
+        .get(reqwest::header::CONTENT_DISPOSITION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+
+    assert!(
+        disposition.starts_with("attachment"),
+        "expected an attachment, got {disposition:?}"
+    );
+    assert!(disposition.contains("bilde-1.png"), "got {disposition:?}");
+
+    store.delete(&path).await.expect("cleanup should succeed");
 }

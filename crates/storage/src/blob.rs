@@ -299,7 +299,12 @@ impl BlobStore {
     /// # Errors
     ///
     /// Returns an error when a delegation key could not be obtained.
-    pub async fn read_url(&self, path: &str, ttl: Duration) -> Result<String, StorageError> {
+    pub async fn read_url(
+        &self,
+        path: &str,
+        ttl: Duration,
+        download_as: Option<&str>,
+    ) -> Result<String, StorageError> {
         let key = self.delegation_key().await?;
 
         let start =
@@ -310,6 +315,13 @@ impl BlobStore {
         let signed_expiry = iso8601(expiry);
         let permissions = "r";
         let resource = "b";
+
+        // `attachment` is what makes the browser save the file instead of
+        // navigating to it. The `download` attribute on a link cannot do this:
+        // it is ignored cross-origin, and the SAS points at blob.core.windows.net.
+        let disposition = download_as.map_or_else(String::new, |name| {
+            format!("attachment; filename=\"{}\"", sanitise_file_name(name))
+        });
 
         // Canonical resource: /blob/{account}/{container}/{blob}
         let canonical = format!("/blob/{}/{}/{}", self.account, self.container, path);
@@ -338,7 +350,7 @@ impl BlobStore {
             "", // signed snapshot time
             "", // signed encryption scope
             "", // rscc: Cache-Control override
-            "", // rscd: Content-Disposition override
+            &disposition,
             "", // rsce: Content-Encoding override
             "", // rscl: Content-Language override
             "", // rsct: Content-Type override
@@ -347,7 +359,9 @@ impl BlobStore {
 
         let signature = sign(&key.value, &string_to_sign)?;
 
-        let query = [
+        // The override is part of the signature, so it cannot be added to the
+        // query afterwards: Storage recomputes the signature over it.
+        let mut query: Vec<(&str, String)> = vec![
             ("sv", API_VERSION.to_owned()),
             ("sr", resource.to_owned()),
             ("st", signed_start),
@@ -360,11 +374,16 @@ impl BlobStore {
             ("sks", key.signed_service.clone()),
             ("skv", key.signed_version.clone()),
             ("sig", signature),
-        ]
-        .iter()
-        .map(|(name, value)| format!("{name}={}", encode(value)))
-        .collect::<Vec<_>>()
-        .join("&");
+        ];
+        if !disposition.is_empty() {
+            query.push(("rscd", disposition.clone()));
+        }
+
+        let query = query
+            .iter()
+            .map(|(name, value)| format!("{name}={}", encode(value)))
+            .collect::<Vec<_>>()
+            .join("&");
 
         Ok(format!(
             "{}/{}/{}?{query}",
@@ -490,6 +509,24 @@ fn element(xml: &str, name: &str) -> Option<String> {
     Some(xml[start..end].trim().to_owned())
 }
 
+/// Strips anything from a download name that does not belong in a header.
+///
+/// The name reaches the client inside a `Content-Disposition` value, so a quote
+/// or a newline in it would break the header apart.
+fn sanitise_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .take(100)
+        .collect();
+
+    if cleaned.is_empty() {
+        "mediagenerator".to_owned()
+    } else {
+        cleaned
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +610,30 @@ mod tests {
             "a key expiring inside the skew is stale"
         );
         assert!(!key(later).is_stale());
+    }
+}
+
+#[cfg(test)]
+mod download_name_tests {
+    use super::*;
+
+    #[test]
+    fn a_download_name_keeps_only_safe_characters() {
+        // The value ends up inside a Content-Disposition header; a quote or a
+        // newline in it would break the header apart.
+        assert_eq!(sanitise_file_name("bilde-1.png"), "bilde-1.png");
+        assert_eq!(sanitise_file_name("a\"b\nc.png"), "abc.png");
+        assert_eq!(sanitise_file_name("../../etc/passwd"), "....etcpasswd");
+    }
+
+    #[test]
+    fn an_empty_name_falls_back_rather_than_producing_an_empty_filename() {
+        assert_eq!(sanitise_file_name(""), "mediagenerator");
+        assert_eq!(sanitise_file_name("///"), "mediagenerator");
+    }
+
+    #[test]
+    fn a_very_long_name_is_cut() {
+        assert_eq!(sanitise_file_name(&"a".repeat(500)).len(), 100);
     }
 }

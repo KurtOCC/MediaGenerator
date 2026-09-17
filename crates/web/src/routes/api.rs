@@ -12,7 +12,7 @@ use std::{convert::Infallible, time::Duration};
 use askama::Template;
 use axum::{
     Extension, Json, Router,
-    extract::{Form, Multipart, Path, State},
+    extract::{Form, Multipart, Path, Query, State},
     http::StatusCode,
     response::{
         Redirect, Sse,
@@ -519,12 +519,21 @@ fn format_elapsed(duration: time::Duration) -> String {
 /// knowing an id would be enough to read anyone's media. The SAS is minted per
 /// request and expires after `SAS_TTL_MINUTES`, so a copied link stops working
 /// rather than becoming a permanent public URL.
+/// Query parameters on the asset route.
+#[derive(Debug, Deserialize)]
+struct AssetQuery {
+    /// Present when the link should save the file rather than display it.
+    #[serde(default)]
+    nedlasting: Option<String>,
+}
+
 async fn asset(
     State(state): State<AppState>,
     session: Session,
     Extension(user): Extension<SessionUser>,
     client: ClientInfo,
     Path(id): Path<Uuid>,
+    Query(query): Query<AssetQuery>,
 ) -> Result<Redirect, AppError> {
     let user_id = local_user_id(&state.db, &session, &user).await?;
 
@@ -532,9 +541,21 @@ async fn asset(
         .await
         .map_err(storage_error)?;
 
+    // A name the user will recognise in their downloads folder, rather than
+    // the UUID the blob is stored under.
+    let download_name = format!(
+        "mediagenerator-{}.{}",
+        &asset.id.to_string()[..8],
+        extension_of(&asset.blob_path)
+    );
+
     let url = state
         .blobs
-        .read_url(&asset.blob_path, state.config.sas_ttl())
+        .read_url(
+            &asset.blob_path,
+            state.config.sas_ttl(),
+            query.nedlasting.as_deref().map(|_| download_name.as_str()),
+        )
         .await
         .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?;
 
@@ -657,4 +678,12 @@ async fn delete_job(
 
     tracing::info!(%user_id, job_id = %id, blobs = paths.len(), "generation deleted");
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Returns the file extension of a blob path, defaulting to `bin`.
+fn extension_of(path: &str) -> &str {
+    path.rsplit('.')
+        .next()
+        .filter(|ext| !ext.is_empty() && ext.len() <= 5)
+        .unwrap_or("bin")
 }

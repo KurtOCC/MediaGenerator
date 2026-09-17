@@ -63,8 +63,13 @@
     {% if !failed %}
     <a
       class="rounded-card border border-border bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:border-accent-hover aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
-      href="{{ asset_url }}"
-      download
+      href="{{ asset_url }}?nedlasting=1"
+      {#
+        No `download` attribute: it is ignored cross-origin, and the link
+        redirects to blob.core.windows.net. The query parameter makes the
+        signed URL carry Content-Disposition: attachment instead, which the
+        browser does honour.
+      #}
       {% if asset_url == "" %}aria-disabled="true"{% endif %}
     >{{ nb::DOWNLOAD }}</a>
 
