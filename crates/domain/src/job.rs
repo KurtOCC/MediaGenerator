@@ -196,3 +196,44 @@ mod tests {
         assert!(matches!(rebuilt, JobStatus::Failed { .. }));
     }
 }
+
+/// A job as the history and archive pages show it.
+///
+/// A projection rather than a [`Job`]: the listings need the asset and the
+/// owner's name, and do not need the prompt parameters or the provider id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobListItem {
+    /// Job identifier.
+    pub id: Uuid,
+    /// What kind of media it produced.
+    pub media_type: MediaType,
+    /// The prompt, shown in quotes on the card.
+    pub prompt: String,
+    /// Lifecycle state, so a failed job can be shown as failed.
+    pub status: JobStatus,
+    /// When the job was accepted.
+    pub created_at: OffsetDateTime,
+    /// The asset it produced, when it produced one.
+    pub asset_id: Option<Uuid>,
+    /// Display name of whoever generated it.
+    pub owner_name: String,
+    /// True when the signed-in user owns this job.
+    pub owned_by_viewer: bool,
+}
+
+/// Which jobs a listing should return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListFilter {
+    /// Restrict to one user's jobs. `None` lists everyone's.
+    pub user_id: Option<Uuid>,
+    /// Restrict to one media type.
+    pub media_type: Option<MediaType>,
+    /// Exclude anything that did not produce media.
+    pub only_succeeded: bool,
+    /// Newest first when true, oldest first when false.
+    pub newest_first: bool,
+    /// Page size.
+    pub limit: i64,
+    /// Rows to skip.
+    pub offset: i64,
+}

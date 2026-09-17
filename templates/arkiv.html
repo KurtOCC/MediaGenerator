@@ -1,0 +1,108 @@
+{#
+  History and archive. One template, two pages: the scope toggle is hidden on
+  /historikk, which is always the viewer's own work.
+
+  The filters are plain links, not scripted controls. That makes them work
+  without JavaScript, survive a reload, and stay shareable as a URL.
+#}
+{% extends "base.html" %}
+
+{% block title %}{{ title }} – {{ nb::APP_TITLE }}{% endblock %}
+
+{% block content %}
+<section class="pt-6 pb-8">
+  <h1 class="text-[28px] font-semibold text-text sm:text-[34px]">{{ title }}</h1>
+  <p class="mt-3 max-w-2xl text-[15px] leading-relaxed text-text-muted">{{ lead }}</p>
+
+  <div class="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3" role="group" aria-label="{{ nb::FILTERS_LABEL }}">
+    {% if show_scope %}
+    <div class="flex items-center gap-2">
+      <span class="text-xs uppercase tracking-wide text-text-muted">{{ nb::FILTER_SCOPE }}</span>
+      <a href="{{ url_own }}" class="filterknapp {% if own_only %}filterknapp-aktiv{% endif %}"
+         {% if own_only %}aria-current="true"{% endif %}>{{ nb::FILTER_OWN }}</a>
+      <a href="{{ url_all }}" class="filterknapp {% if !own_only %}filterknapp-aktiv{% endif %}"
+         {% if !own_only %}aria-current="true"{% endif %}>{{ nb::FILTER_ALL }}</a>
+    </div>
+    {% endif %}
+
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="text-xs uppercase tracking-wide text-text-muted">{{ nb::FILTER_TYPE }}</span>
+      <a href="{{ url_type_all }}" class="filterknapp {% if active_type == "alle" %}filterknapp-aktiv{% endif %}"
+         {% if active_type == "alle" %}aria-current="true"{% endif %}>{{ nb::FILTER_ALL_TYPES }}</a>
+      <a href="{{ url_type_image }}" class="filterknapp {% if active_type == "bilde" %}filterknapp-aktiv{% endif %}"
+         {% if active_type == "bilde" %}aria-current="true"{% endif %}>{{ nb::MEDIA_IMAGE }}</a>
+      <a href="{{ url_type_audio }}" class="filterknapp {% if active_type == "lyd" %}filterknapp-aktiv{% endif %}"
+         {% if active_type == "lyd" %}aria-current="true"{% endif %}>{{ nb::MEDIA_AUDIO }}</a>
+      <a href="{{ url_type_video }}" class="filterknapp {% if active_type == "video" %}filterknapp-aktiv{% endif %}"
+         {% if active_type == "video" %}aria-current="true"{% endif %}>{{ nb::MEDIA_VIDEO }}</a>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <span class="text-xs uppercase tracking-wide text-text-muted">{{ nb::FILTER_SORT }}</span>
+      <a href="{{ url_newest }}" class="filterknapp {% if newest_first %}filterknapp-aktiv{% endif %}"
+         {% if newest_first %}aria-current="true"{% endif %}>{{ nb::SORT_NEWEST }}</a>
+      <a href="{{ url_oldest }}" class="filterknapp {% if !newest_first %}filterknapp-aktiv{% endif %}"
+         {% if !newest_first %}aria-current="true"{% endif %}>{{ nb::SORT_OLDEST }}</a>
+    </div>
+  </div>
+
+  {% if entries.is_empty() %}
+  <div class="mt-8 rounded-panel border border-dashed border-border bg-surface p-10 text-center">
+    <p class="text-sm text-text-muted">{{ nb::EMPTY_NOTHING_FOUND }}</p>
+    <a href="/" class="mt-4 inline-block rounded-card bg-accent px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover">
+      {{ nb::BACK_TO_GENERATOR }}
+    </a>
+  </div>
+  {% else %}
+  <ul class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    {% for entry in entries %}
+    <li class="overflow-hidden rounded-panel border border-border bg-surface">
+      <div class="relative flex h-44 items-center justify-center bg-gradient-to-br from-surface-2 to-[#0d1119]">
+        {% if entry.failed %}
+          <p class="px-6 text-center text-xs text-text-muted">{{ entry.error_message }}</p>
+        {% else if entry.asset_url == "" %}
+          <p class="px-6 text-center text-xs text-text-muted">{{ nb::NO_PREVIEW }}</p>
+        {% else if entry.media_type == "image" %}
+          {# Lazy: a page of 24 images should not all load at once. #}
+          <img class="h-full w-full object-cover" src="{{ entry.asset_url }}" alt="{{ entry.prompt }}" loading="lazy" />
+        {% else if entry.media_type == "audio" %}
+          <audio controls preload="none" class="w-[88%]" src="{{ entry.asset_url }}"></audio>
+        {% else %}
+          <video controls preload="none" playsinline class="h-full w-full object-cover" src="{{ entry.asset_url }}"></video>
+        {% endif %}
+      </div>
+
+      <div class="border-t border-border p-3.5">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[11px] uppercase tracking-wide text-text-muted">{{ entry.media_label }}</p>
+          <p class="text-[11px] text-text-muted">{{ entry.created }}</p>
+        </div>
+        <p class="mt-1 line-clamp-2 text-sm text-text">&laquo;{{ entry.prompt }}&raquo;</p>
+        <p class="mt-2 text-[11px] text-text-muted">
+          {% if entry.own %}{{ nb::BY_YOU }}{% else %}{{ entry.owner_name }}{% endif %}
+        </p>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+
+  {% if pages > 1 %}
+  <nav class="mt-8 flex items-center justify-between" aria-label="{{ nb::PAGINATION_LABEL }}">
+    {% if previous_url == "" %}
+      <span class="sidelenke-av">{{ nb::PREVIOUS_PAGE }}</span>
+    {% else %}
+      <a href="{{ previous_url }}" class="sidelenke">{{ nb::PREVIOUS_PAGE }}</a>
+    {% endif %}
+
+    <span class="text-sm text-text-muted">{{ nb::page_of(page.clone(), pages.clone()) }}</span>
+
+    {% if next_url == "" %}
+      <span class="sidelenke-av">{{ nb::NEXT_PAGE }}</span>
+    {% else %}
+      <a href="{{ next_url }}" class="sidelenke">{{ nb::NEXT_PAGE }}</a>
+    {% endif %}
+  </nav>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

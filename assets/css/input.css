@@ -119,6 +119,24 @@
     display: none;
   }
 
+  /* Filter and sort controls. Links, not buttons: they change the URL. */
+  .filterknapp {
+    @apply rounded-full border border-border bg-surface px-3.5 py-1.5 text-[13px]
+      text-text-muted transition-colors hover:border-accent-hover hover:text-text;
+  }
+  .filterknapp-aktiv {
+    @apply border-accent bg-accent/10 text-text;
+  }
+
+  /* Pagination. The disabled variant is a span, so it is not focusable. */
+  .sidelenke {
+    @apply rounded-card border border-border bg-surface px-4 py-2 text-sm text-text
+      transition-colors hover:border-accent-hover;
+  }
+  .sidelenke-av {
+    @apply rounded-card border border-border/50 px-4 py-2 text-sm text-text-muted/50;
+  }
+
   /* Screen-reader-only text that becomes visible on keyboard focus. */
   .hopp-lenke {
     position: absolute;

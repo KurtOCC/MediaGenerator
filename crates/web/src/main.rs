@@ -73,6 +73,10 @@ async fn main() -> anyhow::Result<()> {
         blobs: Arc::clone(&blobs),
     });
 
+    // Prompts and media are personal data; RETENTION_DAYS bounds how long
+    // they are kept, and this task is what makes that real.
+    mediagenerator_web::retention::spawn(db.clone(), Arc::clone(&blobs), config.retention_days);
+
     let listener = TcpListener::bind(address)
         .await
         .with_context(|| format!("failed to bind {address}"))?;

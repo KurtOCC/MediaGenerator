@@ -17,16 +17,17 @@ use tower_sessions::Session;
 
 use mediagenerator_storage::jobs;
 
+/// Show the remaining-generations hint from this many left and below.
+const HINT_THRESHOLD: u32 = 5;
+
 use crate::{
-    error::AppError, identity::local_user_id, middleware::csrf, render::Page, state::AppState,
+    error::AppError, identity::local_user_id, middleware::csrf, ratelimit, render::Page,
+    state::AppState,
 };
 
 /// Returns the page routes.
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/", get(index))
-        .route("/historikk", get(history))
-        .route("/eksempler", get(archive))
+    Router::new().route("/", get(index))
 }
 
 /// One card in the "Generert" grid.
@@ -78,21 +79,13 @@ struct IndexTemplate {
     /// Rendered on load so that a reload or a navigation back picks the
     /// generation up again, rather than losing sight of it.
     active_job: Option<String>,
+    /// Hint about how many generations are left this hour.
+    ///
+    /// Empty unless the user is close to the limit: a counter that is always
+    /// there is noise, and one that appears only as a refusal is a surprise.
+    rate_limit_hint: String,
     /// Cards in the "Generert" grid.
     examples: Vec<Example>,
-}
-
-/// A page with a heading, an ingress and an empty state.
-#[derive(Template)]
-#[template(path = "enkel_side.html")]
-struct SimplePageTemplate {
-    csrf_token: String,
-    initials: String,
-    display_name: String,
-    /// Page heading, also used in the browser tab.
-    title: &'static str,
-    /// Ingress under the heading.
-    lead: &'static str,
 }
 
 /// Renders the generator.
@@ -103,15 +96,33 @@ async fn index(
 ) -> Result<Page<IndexTemplate>, AppError> {
     let csrf_token = csrf_token(&session).await?;
     let active_job = active_job_card(&state, &session, &user).await;
+    let rate_limit_hint = rate_limit_hint(&state, &session, &user).await;
 
     Ok(Page(IndexTemplate {
         csrf_token,
         initials: user.initials(),
         display_name: user.display_name.clone(),
         max_prompt_chars: state.config.max_prompt_chars,
+        rate_limit_hint,
         active_job,
         examples: examples(),
     }))
+}
+
+/// Returns the remaining-generations hint, or an empty string.
+///
+/// Only shown once the user is within [`HINT_THRESHOLD`] of the limit. A
+/// failure to read the count is swallowed: the hint is a courtesy, and the
+/// limit is enforced on submission regardless.
+async fn rate_limit_hint(state: &AppState, session: &Session, user: &SessionUser) -> String {
+    let Ok(user_id) = local_user_id(&state.db, session, user).await else {
+        return String::new();
+    };
+
+    match ratelimit::remaining(&state.db, user_id, state.config.rate_limit_per_hour).await {
+        Ok(Some(left)) if left <= HINT_THRESHOLD => nb::generations_remaining(left),
+        _ => String::new(),
+    }
 }
 
 /// Renders the card for the user's most recent unfinished job, if any.
@@ -138,50 +149,6 @@ async fn active_job_card(
         .ok()
 }
 
-/// Renders the user's own history. Filled in phase 6.
-async fn history(
-    session: Session,
-    Extension(user): Extension<SessionUser>,
-) -> Result<Page<SimplePageTemplate>, AppError> {
-    simple_page(
-        &session,
-        &user,
-        nb::PAGE_HISTORY_TITLE,
-        nb::PAGE_HISTORY_LEAD,
-    )
-    .await
-}
-
-/// Renders the shared archive. Filled in phase 6.
-async fn archive(
-    session: Session,
-    Extension(user): Extension<SessionUser>,
-) -> Result<Page<SimplePageTemplate>, AppError> {
-    simple_page(
-        &session,
-        &user,
-        nb::PAGE_ARCHIVE_TITLE,
-        nb::PAGE_ARCHIVE_LEAD,
-    )
-    .await
-}
-
-/// Builds a placeholder page.
-async fn simple_page(
-    session: &Session,
-    user: &SessionUser,
-    title: &'static str,
-    lead: &'static str,
-) -> Result<Page<SimplePageTemplate>, AppError> {
-    Ok(Page(SimplePageTemplate {
-        csrf_token: csrf_token(session).await?,
-        initials: user.initials(),
-        display_name: user.display_name.clone(),
-        title,
-        lead,
-    }))
-}
-
 /// Reads or creates this session's CSRF token.
 async fn csrf_token(session: &Session) -> Result<String, AppError> {
     csrf::token(session)
@@ -199,6 +166,7 @@ mod tests {
             initials: "HK".to_owned(),
             display_name: display_name.to_owned(),
             max_prompt_chars: 4000,
+            rate_limit_hint: String::new(),
             active_job: None,
             examples: examples(),
         }
@@ -282,22 +250,5 @@ mod tests {
             .expect("the front page should render");
         assert!(!html.contains("<script>alert(1)</script>"));
         assert!(html.contains("&#60;script&#62;"));
-    }
-
-    #[test]
-    fn the_placeholder_pages_render() {
-        let html = SimplePageTemplate {
-            csrf_token: "t".to_owned(),
-            initials: "HK".to_owned(),
-            display_name: "Hans Kristiansen".to_owned(),
-            title: nb::PAGE_ARCHIVE_TITLE,
-            lead: nb::PAGE_ARCHIVE_LEAD,
-        }
-        .render()
-        .expect("the placeholder page should render");
-
-        assert!(html.contains(nb::PAGE_ARCHIVE_TITLE));
-        assert!(html.contains(nb::PAGE_ARCHIVE_LEAD));
-        assert!(html.contains(nb::BACK_TO_GENERATOR));
     }
 }

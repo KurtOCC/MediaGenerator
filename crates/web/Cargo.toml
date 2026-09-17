@@ -20,6 +20,7 @@ mediagenerator-providers = { version = "0.1.0", path = "../providers" }
 mediagenerator-storage = { version = "0.1.0", path = "../storage" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+serde_urlencoded = "0.7.1"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "uuid", "time", "json", "migrate"] }
 thiserror = "2.0.20"
 time = { version = "0.3.45", features = ["serde"] }
@@ -39,4 +40,5 @@ path = "src/main.rs"
 
 [dev-dependencies]
 mediagenerator-domain = { path = "../domain" }
+serde_urlencoded = "0.7.1"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres"] }

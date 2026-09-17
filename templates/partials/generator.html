@@ -140,6 +140,11 @@
       {% for forslag in nb::SUGGESTIONS_VIDEO %}{% call chip(forslag) %}{% endcall %}{% endfor %}
     </span>
   </div>
+
+  {# Only rendered when the hourly limit is close, so it is a warning and not noise. #}
+  {% if rate_limit_hint != "" %}
+  <p class="mt-2 px-1 text-xs text-text-muted" role="status">{{ rate_limit_hint }}</p>
+  {% endif %}
 </form>
 
 

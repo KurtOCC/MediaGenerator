@@ -261,3 +261,27 @@ async fn assets_are_not_cached_by_the_api_cache_control() {
         "probe responses must not inherit the asset cache policy"
     );
 }
+
+#[tokio::test]
+async fn the_archive_pages_are_behind_the_guard() {
+    for path in [
+        "/historikk",
+        "/eksempler",
+        "/eksempler?eier=alle&type=lyd&sortering=eldst&side=2",
+    ] {
+        assert_eq!(
+            get(path).await.status(),
+            StatusCode::SEE_OTHER,
+            "{path} should require a session"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_asset_cannot_be_reached_without_a_session() {
+    // The SAS is minted behind an ownership check; without a session there is
+    // nobody to check ownership against.
+    let response = get("/api/assets/00000000-0000-0000-0000-000000000000").await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json(response).await["message"], nb::ERR_UNAUTHENTICATED);
+}

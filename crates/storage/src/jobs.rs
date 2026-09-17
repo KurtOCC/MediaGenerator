@@ -5,7 +5,7 @@
 //! belongs to someone else must be indistinguishable from one that does not
 //! exist.
 
-use mediagenerator_domain::{Job, JobStatus, MediaType, NewJob};
+use mediagenerator_domain::{Job, JobListItem, JobStatus, ListFilter, MediaType, NewJob};
 use sqlx::{Row as _, postgres::PgRow};
 use uuid::Uuid;
 
@@ -287,4 +287,135 @@ pub async fn delete_older_than(db: &Database, days: i32) -> Result<u64, StorageE
             .map_err(map_sqlx)?;
 
     Ok(result.rows_affected())
+}
+
+/// Columns selected for a [`JobListItem`].
+///
+/// The asset is joined in rather than fetched per row: a page of twenty jobs
+/// would otherwise be twenty-one queries.
+const LIST_COLUMNS: &str = "j.id, j.user_id, j.media_type::text as media_type, j.prompt, \
+                            j.status, j.error_code, j.error_message, j.created_at, \
+                            a.id as asset_id, u.display_name as owner_name";
+
+/// Builds the `where` clause and records which parameter each filter took.
+///
+/// The fragments are assembled from fixed strings only; every value the caller
+/// supplies travels as a bind parameter, so nothing here can be injected into.
+fn list_predicates(filter: &ListFilter) -> (String, bool, bool) {
+    let mut clauses = vec!["true".to_owned()];
+    let mut next = 1;
+
+    let by_user = filter.user_id.is_some();
+    if by_user {
+        clauses.push(format!("j.user_id = ${next}"));
+        next += 1;
+    }
+
+    let by_media = filter.media_type.is_some();
+    if by_media {
+        clauses.push(format!("j.media_type = ${next}::media_type"));
+    }
+
+    if filter.only_succeeded {
+        // A job with no asset has nothing to show in a gallery, even if the
+        // row itself says it succeeded.
+        clauses.push("j.status = 'succeeded' and a.id is not null".to_owned());
+    }
+
+    (clauses.join(" and "), by_user, by_media)
+}
+
+/// Builds a [`JobListItem`] from a row.
+fn to_list_item(row: &PgRow, viewer: Uuid) -> Result<JobListItem, StorageError> {
+    let media_type: String = row.try_get("media_type").map_err(map_sqlx)?;
+    let status: String = row.try_get("status").map_err(map_sqlx)?;
+    let error_code: Option<String> = row.try_get("error_code").map_err(map_sqlx)?;
+    let error_message: Option<String> = row.try_get("error_message").map_err(map_sqlx)?;
+    let user_id: Uuid = row.try_get("user_id").map_err(map_sqlx)?;
+
+    Ok(JobListItem {
+        id: row.try_get("id").map_err(map_sqlx)?,
+        media_type: media_type.parse().unwrap_or(MediaType::Image),
+        prompt: row.try_get("prompt").map_err(map_sqlx)?,
+        status: JobStatus::from_columns(&status, error_code.as_deref(), error_message.as_deref()),
+        created_at: row.try_get("created_at").map_err(map_sqlx)?,
+        asset_id: row.try_get("asset_id").map_err(map_sqlx)?,
+        owner_name: row.try_get("owner_name").map_err(map_sqlx)?,
+        owned_by_viewer: user_id == viewer,
+    })
+}
+
+/// Returns one page of jobs matching `filter`.
+///
+/// `viewer` decides only which rows are marked as the viewer's own; what is
+/// visible at all is decided by `filter.user_id`.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn list(
+    db: &Database,
+    filter: &ListFilter,
+    viewer: Uuid,
+) -> Result<Vec<JobListItem>, StorageError> {
+    let (predicates, by_user, by_media) = list_predicates(filter);
+    let direction = if filter.newest_first { "desc" } else { "asc" };
+
+    // Two more placeholders than the predicates used, for limit and offset.
+    let used = usize::from(by_user) + usize::from(by_media);
+    let sql = format!(
+        "select {LIST_COLUMNS}
+         from jobs j
+         join users u on u.id = j.user_id
+         left join assets a on a.job_id = j.id
+         where {predicates}
+         order by j.created_at {direction}
+         limit ${} offset ${}",
+        used + 1,
+        used + 2
+    );
+
+    let mut query = sqlx::query(&sql);
+    if let Some(user_id) = filter.user_id {
+        query = query.bind(user_id);
+    }
+    if let Some(media_type) = filter.media_type {
+        query = query.bind(media_type.as_str());
+    }
+    let rows = query
+        .bind(filter.limit)
+        .bind(filter.offset)
+        .fetch_all(db)
+        .await
+        .map_err(map_sqlx)?;
+
+    rows.iter().map(|row| to_list_item(row, viewer)).collect()
+}
+
+/// Counts the jobs matching `filter`, for pagination.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn count(db: &Database, filter: &ListFilter) -> Result<i64, StorageError> {
+    let (predicates, by_user, by_media) = list_predicates(filter);
+
+    let sql = format!(
+        "select count(*) as antall
+         from jobs j
+         left join assets a on a.job_id = j.id
+         where {predicates}"
+    );
+    let _ = (by_user, by_media);
+
+    let mut query = sqlx::query(&sql);
+    if let Some(user_id) = filter.user_id {
+        query = query.bind(user_id);
+    }
+    if let Some(media_type) = filter.media_type {
+        query = query.bind(media_type.as_str());
+    }
+
+    let row = query.fetch_one(db).await.map_err(map_sqlx)?;
+    row.try_get("antall").map_err(map_sqlx)
 }

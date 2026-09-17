@@ -17,6 +17,6 @@ pub mod user;
 pub use asset::{Asset, NewAsset};
 pub use audit::{AuditAction, AuditEntry};
 pub use error::{DomainError, ErrorCode};
-pub use job::{Job, JobStatus, NewJob};
+pub use job::{Job, JobListItem, JobStatus, ListFilter, NewJob};
 pub use media::{MediaType, validate_prompt};
 pub use user::User;

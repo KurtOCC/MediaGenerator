@@ -135,6 +135,40 @@ pub mod nb {
     /// Ingress of the archive page.
     pub const PAGE_ARCHIVE_LEAD: &str = "Arkiv over generert innhold. Du kan velge mellom dine egne og alle, \
          sortere etter dato og filtrere på bilde, lyd og video.";
+    /// Accessible label for the filter group.
+    pub const FILTERS_LABEL: &str = "Filtrer og sorter";
+    /// Label above the own/all toggle.
+    pub const FILTER_SCOPE: &str = "Vis";
+    /// Scope: only the viewer's own work.
+    pub const FILTER_OWN: &str = "Egne";
+    /// Scope: everyone's work.
+    pub const FILTER_ALL: &str = "Alle";
+    /// Label above the media type filter.
+    pub const FILTER_TYPE: &str = "Type";
+    /// Media filter: no restriction.
+    pub const FILTER_ALL_TYPES: &str = "Alle";
+    /// Label above the sort control.
+    pub const FILTER_SORT: &str = "Sorter";
+    /// Sort: newest first.
+    pub const SORT_NEWEST: &str = "Nyeste";
+    /// Sort: oldest first.
+    pub const SORT_OLDEST: &str = "Eldste";
+    /// Shown when a filter matched nothing.
+    pub const EMPTY_NOTHING_FOUND: &str =
+        "Ingenting å vise her ennå. Prøv et annet filter, eller generer noe nytt.";
+    /// Shown in place of a preview when the job produced no file.
+    pub const NO_PREVIEW: &str = "Ingen forhåndsvisning";
+    /// Attribution for the viewer's own work.
+    pub const BY_YOU: &str = "Generert av deg";
+    /// Accessible label for the pagination controls.
+    pub const PAGINATION_LABEL: &str = "Sidenavigasjon";
+    /// Link to the previous page.
+    pub const PREVIOUS_PAGE: &str = "← Forrige";
+    /// Link to the next page.
+    pub const NEXT_PAGE: &str = "Neste →";
+    /// Shown when the hourly limit is nearly used up.
+    pub const RATE_LIMIT_REMAINING_LABEL: &str = "igjen denne timen";
+
     /// Empty state on pages that are not built yet.
     pub const EMPTY_COMING_IN_PHASE_6: &str = "Denne siden fylles med innhold senere.";
     /// Link back to the generator from an empty page.
@@ -192,6 +226,16 @@ pub mod nb {
 
     /// Unit suffix for a duration in seconds.
     pub const SECONDS_SUFFIX: &str = "s";
+
+    /// Returns the "page X of Y" line under a listing.
+    pub fn page_of(page: i64, pages: i64) -> String {
+        format!("Side {page} av {pages}")
+    }
+
+    /// Returns the remaining-generations hint shown under the prompt.
+    pub fn generations_remaining(remaining: u32) -> String {
+        format!("{remaining} genereringer {RATE_LIMIT_REMAINING_LABEL}")
+    }
 
     /// Returns the message shown when the prompt exceeds `max` characters.
     pub fn err_prompt_too_long(max: usize) -> String {

@@ -12,7 +12,9 @@ pub mod error;
 pub mod identity;
 pub mod jobs;
 pub mod middleware;
+pub mod ratelimit;
 pub mod render;
+pub mod retention;
 pub mod routes;
 pub mod session;
 pub mod state;
@@ -107,6 +109,7 @@ where
     // meant to stay open for as long as the job runs, and a request timeout
     // would sever it every 30 seconds.
     let protected = routes::pages::router()
+        .merge(routes::archive::router())
         .layer(timeout)
         .merge(api)
         .merge(routes::api::stream_router())

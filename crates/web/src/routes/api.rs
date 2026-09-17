@@ -31,7 +31,7 @@ use tower_sessions::Session;
 use uuid::Uuid;
 
 use crate::{
-    client_info::ClientInfo, error::AppError, identity::local_user_id, render::Page,
+    client_info::ClientInfo, error::AppError, identity::local_user_id, ratelimit, render::Page,
     state::AppState,
 };
 
@@ -99,6 +99,10 @@ async fn generate(
 ) -> Result<Page<JobCardTemplate>, AppError> {
     let prompt = validate_prompt(&form.prompt, state.config.max_prompt_chars)?;
     let user_id = local_user_id(&state.db, &session, &user).await?;
+
+    // Checked before the row is written, so a refused generation leaves no
+    // trace in the history and does not itself count towards the limit.
+    ratelimit::check(&state.db, user_id, state.config.rate_limit_per_hour).await?;
 
     let job = jobs::create(
         &state.db,

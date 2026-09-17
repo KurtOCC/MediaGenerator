@@ -10,9 +10,12 @@
 //! never at one holding real generations.
 
 use mediagenerator_domain::{
-    AuditAction, AuditEntry, ErrorCode, JobStatus, MediaType, NewAsset, NewJob,
+    AuditAction, AuditEntry, ErrorCode, JobStatus, ListFilter, MediaType, NewAsset, NewJob,
 };
 use mediagenerator_storage::{Database, StorageError, assets, audit, connect, jobs, users};
+use std::sync::LazyLock;
+
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// Environment variable holding the throwaway database to test against.
@@ -30,9 +33,32 @@ async fn database() -> Option<Database> {
     }
 }
 
+/// Guards the shared test database.
+///
+/// Most tests only touch their own rows and can run together, so they take a
+/// read guard. The retention tests delete *every* job older than zero days,
+/// which is every job, so they take the write guard and run alone. Without
+/// this they would delete rows out from under whatever else was running.
+static DATABASE_ACCESS: LazyLock<RwLock<()>> = LazyLock::new(|| RwLock::new(()));
+
 /// Runs `body` against the database, or does nothing when unconfigured.
 macro_rules! with_database {
     (|$db:ident| $body:block) => {
+        let _shared = DATABASE_ACCESS.read().await;
+        let Some($db) = database().await else {
+            eprintln!("skipped: {TEST_DATABASE_URL} is not set");
+            return;
+        };
+        $body
+    };
+}
+
+/// Runs `body` with the database to itself.
+///
+/// For tests that delete rows they do not own.
+macro_rules! with_exclusive_database {
+    (|$db:ident| $body:block) => {
+        let _exclusive = DATABASE_ACCESS.write().await;
         let Some($db) = database().await else {
             eprintln!("skipped: {TEST_DATABASE_URL} is not set");
             return;
@@ -283,7 +309,7 @@ async fn an_asset_is_only_reachable_by_the_owner_of_its_job() {
 
 #[tokio::test]
 async fn deleting_a_job_takes_its_assets_with_it() {
-    with_database!(|db| {
+    with_exclusive_database!(|db| {
         let user = a_user(&db).await;
         let job = a_job(&db, user.id, "slettes").await;
 
@@ -402,5 +428,233 @@ async fn an_audit_entry_tolerates_a_missing_ip() {
         )
         .await
         .expect("the audit entry should be written");
+    });
+}
+
+/// Creates a queued job of a given media type.
+async fn a_typed_job(
+    db: &Database,
+    user_id: Uuid,
+    media_type: MediaType,
+    prompt: &str,
+) -> mediagenerator_domain::Job {
+    jobs::create(
+        db,
+        &NewJob {
+            user_id,
+            media_type,
+            prompt: prompt.to_owned(),
+            parameters: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("the job should be created")
+}
+
+/// Marks a job succeeded and gives it an asset.
+async fn succeed_with_asset(db: &Database, job_id: Uuid) -> Uuid {
+    jobs::mark_running(db, job_id).await.expect("should start");
+    jobs::finish(db, job_id, &JobStatus::Succeeded)
+        .await
+        .expect("should finish");
+
+    assets::create(
+        db,
+        &NewAsset {
+            job_id,
+            blob_path: format!("2026/09/test/{job_id}.png"),
+            content_type: "image/png".to_owned(),
+            size_bytes: 1,
+            duration_ms: None,
+            width: None,
+            height: None,
+        },
+    )
+    .await
+    .expect("the asset should be created")
+    .id
+}
+
+/// A filter with sane defaults for the tests.
+fn filter(user_id: Option<Uuid>) -> ListFilter {
+    ListFilter {
+        user_id,
+        media_type: None,
+        only_succeeded: false,
+        newest_first: true,
+        limit: 50,
+        offset: 0,
+    }
+}
+
+#[tokio::test]
+async fn a_listing_carries_the_asset_and_the_owner_in_one_query() {
+    with_database!(|db| {
+        let user = a_user(&db).await;
+        let job = a_typed_job(&db, user.id, MediaType::Image, "med fil").await;
+        let asset_id = succeed_with_asset(&db, job.id).await;
+
+        let listed = jobs::list(&db, &filter(Some(user.id)), user.id)
+            .await
+            .expect("the listing should run");
+
+        let found = listed
+            .iter()
+            .find(|item| item.id == job.id)
+            .expect("the job should be listed");
+
+        assert_eq!(found.asset_id, Some(asset_id));
+        assert_eq!(found.owner_name, user.display_name);
+        assert!(found.owned_by_viewer);
+    });
+}
+
+#[tokio::test]
+async fn the_media_filter_narrows_the_listing() {
+    with_database!(|db| {
+        let user = a_user(&db).await;
+        let image = a_typed_job(&db, user.id, MediaType::Image, "bilde").await;
+        let audio = a_typed_job(&db, user.id, MediaType::Audio, "lyd").await;
+
+        let mut only_audio = filter(Some(user.id));
+        only_audio.media_type = Some(MediaType::Audio);
+
+        let listed = jobs::list(&db, &only_audio, user.id)
+            .await
+            .expect("the listing should run");
+
+        let ids: Vec<_> = listed.iter().map(|item| item.id).collect();
+        assert!(ids.contains(&audio.id));
+        assert!(!ids.contains(&image.id));
+
+        // And the count agrees with the listing, or pagination would lie.
+        assert_eq!(
+            jobs::count(&db, &only_audio)
+                .await
+                .expect("count should run"),
+            listed.len() as i64
+        );
+    });
+}
+
+#[tokio::test]
+async fn the_archive_hides_jobs_that_produced_nothing() {
+    with_database!(|db| {
+        let user = a_user(&db).await;
+        let with_file = a_typed_job(&db, user.id, MediaType::Image, "har fil").await;
+        let queued = a_typed_job(&db, user.id, MediaType::Image, "ingen fil").await;
+        succeed_with_asset(&db, with_file.id).await;
+
+        let mut archive = filter(Some(user.id));
+        archive.only_succeeded = true;
+
+        let listed = jobs::list(&db, &archive, user.id)
+            .await
+            .expect("the listing should run");
+
+        let ids: Vec<_> = listed.iter().map(|item| item.id).collect();
+        assert!(ids.contains(&with_file.id));
+        assert!(
+            !ids.contains(&queued.id),
+            "a gallery entry with no file has nothing to show"
+        );
+    });
+}
+
+#[tokio::test]
+async fn the_shared_archive_shows_other_peoples_work_but_marks_it_as_theirs() {
+    with_database!(|db| {
+        let viewer = a_user(&db).await;
+        let other = a_user(&db).await;
+
+        let mine = a_typed_job(&db, viewer.id, MediaType::Image, "mitt").await;
+        let theirs = a_typed_job(&db, other.id, MediaType::Image, "deres").await;
+        succeed_with_asset(&db, mine.id).await;
+        succeed_with_asset(&db, theirs.id).await;
+
+        // user_id = None is the "alle" view.
+        let listed = jobs::list(&db, &filter(None), viewer.id)
+            .await
+            .expect("the listing should run");
+
+        let mine_row = listed.iter().find(|item| item.id == mine.id);
+        let theirs_row = listed.iter().find(|item| item.id == theirs.id);
+
+        assert!(mine_row.is_some_and(|item| item.owned_by_viewer));
+        assert!(theirs_row.is_some_and(|item| !item.owned_by_viewer));
+    });
+}
+
+#[tokio::test]
+async fn sorting_runs_both_ways() {
+    with_database!(|db| {
+        let user = a_user(&db).await;
+        let first = a_typed_job(&db, user.id, MediaType::Image, "eldst").await;
+        let second = a_typed_job(&db, user.id, MediaType::Image, "nyest").await;
+
+        let newest = jobs::list(&db, &filter(Some(user.id)), user.id)
+            .await
+            .expect("the listing should run");
+        assert_eq!(newest.first().map(|item| item.id), Some(second.id));
+
+        let mut oldest_first = filter(Some(user.id));
+        oldest_first.newest_first = false;
+        let oldest = jobs::list(&db, &oldest_first, user.id)
+            .await
+            .expect("the listing should run");
+        assert_eq!(oldest.first().map(|item| item.id), Some(first.id));
+    });
+}
+
+#[tokio::test]
+async fn paging_does_not_repeat_or_skip_a_row() {
+    with_database!(|db| {
+        let user = a_user(&db).await;
+        for index in 0..5 {
+            a_typed_job(&db, user.id, MediaType::Image, &format!("nr {index}")).await;
+        }
+
+        let mut page = filter(Some(user.id));
+        page.limit = 2;
+
+        let mut seen = Vec::new();
+        for offset in [0, 2, 4] {
+            page.offset = offset;
+            let rows = jobs::list(&db, &page, user.id)
+                .await
+                .expect("the listing should run");
+            seen.extend(rows.into_iter().map(|item| item.id));
+        }
+
+        assert_eq!(seen.len(), 5);
+        let unique: std::collections::HashSet<_> = seen.iter().collect();
+        assert_eq!(unique.len(), 5, "a row appeared on two pages");
+    });
+}
+
+#[tokio::test]
+async fn retention_finds_the_blob_paths_before_the_rows_are_deleted() {
+    with_exclusive_database!(|db| {
+        let user = a_user(&db).await;
+        let job = a_typed_job(&db, user.id, MediaType::Image, "gammel").await;
+        succeed_with_asset(&db, job.id).await;
+
+        // Everything older than zero days, which is everything.
+        let paths = assets::paths_older_than(&db, 0)
+            .await
+            .expect("the lookup should run");
+        assert!(
+            paths.iter().any(|path| path.contains(&job.id.to_string())),
+            "the path must be readable before the cascade removes the row"
+        );
+
+        jobs::delete_older_than(&db, 0)
+            .await
+            .expect("the sweep should run");
+
+        let after = assets::paths_older_than(&db, 0)
+            .await
+            .expect("the lookup should run");
+        assert!(!after.iter().any(|path| path.contains(&job.id.to_string())));
     });
 }

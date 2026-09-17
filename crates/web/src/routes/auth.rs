@@ -19,11 +19,12 @@ use mediagenerator_auth::{
     AuthError, SessionUser,
     session::{current_user, id_token, put_login_flow, put_user, take_login_flow},
 };
-use mediagenerator_domain::i18n::nb;
+use mediagenerator_domain::{AuditAction, AuditEntry, i18n::nb};
+use mediagenerator_storage::{audit, users};
 use serde::Deserialize;
 use tower_sessions::Session;
 
-use crate::{error::AppError, state::AppState};
+use crate::{client_info::ClientInfo, error::AppError, identity::remember, state::AppState};
 
 /// Where a user lands after signing in when nothing else was requested.
 const DEFAULT_RETURN_TO: &str = "/";
@@ -91,6 +92,7 @@ pub struct CallbackQuery {
 async fn callback(
     State(state): State<AppState>,
     session: Session,
+    client: ClientInfo,
     Query(query): Query<CallbackQuery>,
 ) -> Result<Response, AppError> {
     // Taken, not read: a callback may be handled at most once, so a replay
@@ -144,6 +146,28 @@ async fn callback(
 
     tracing::info!(oid = %user.oid, "user signed in");
 
+    // The users row is created or refreshed here, and the local id cached on
+    // the session, so the first generation does not pay for the lookup.
+    match users::upsert_on_login(
+        &state.db,
+        &user.oid,
+        user.email.as_deref(),
+        &user.display_name,
+    )
+    .await
+    {
+        Ok(row) => {
+            remember(&session, row.id).await?;
+            record_audit(&state, Some(row.id), AuditAction::SignIn, &client).await;
+        }
+        Err(error) => {
+            // The sign-in itself succeeded; the row can be created lazily on
+            // the first request that needs it. Refusing the login here would
+            // be a worse outcome than a missing audit line.
+            tracing::error!(%error, oid = %user.oid, "could not record the sign-in");
+        }
+    }
+
     let destination = sanitise_return_to(Some(&flow.return_to));
     Ok(Redirect::to(&destination).into_response())
 }
@@ -152,11 +176,21 @@ async fn callback(
 ///
 /// The local session is flushed first: even if the redirect to Entra ID fails,
 /// the user is signed out of this application.
-async fn logout(State(state): State<AppState>, session: Session) -> Result<Response, AppError> {
+async fn logout(
+    State(state): State<AppState>,
+    session: Session,
+    client: ClientInfo,
+) -> Result<Response, AppError> {
     let hint = id_token(&session).await.map_err(internal)?;
 
     if let Some(user) = current_user(&session).await.map_err(internal)? {
         tracing::info!(oid = %user.oid, "user signed out");
+        let user_id = session
+            .get::<uuid::Uuid>("app.user_id")
+            .await
+            .ok()
+            .flatten();
+        record_audit(&state, user_id, AuditAction::SignOut, &client).await;
     }
 
     session
@@ -221,6 +255,29 @@ fn upstream(error: AuthError) -> AppError {
 /// Maps an internal failure, keeping the cause in the log only.
 fn internal(error: AuthError) -> AppError {
     AppError::Internal(anyhow::Error::new(error))
+}
+
+/// Appends an audit entry, logging rather than failing when it cannot be written.
+///
+/// A missing audit line must never cost the user their sign-in or sign-out.
+async fn record_audit(
+    state: &AppState,
+    user_id: Option<uuid::Uuid>,
+    action: AuditAction,
+    client: &ClientInfo,
+) {
+    let entry = AuditEntry {
+        user_id,
+        action,
+        entity: "user",
+        entity_id: user_id.map(|id| id.to_string()),
+        ip: client.ip.clone(),
+        user_agent: client.user_agent.clone(),
+    };
+
+    if let Err(error) = audit::record(&state.db, &entry).await {
+        tracing::error!(%error, action = action.as_str(), "could not write the audit entry");
+    }
 }
 
 #[cfg(test)]

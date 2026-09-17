@@ -1805,6 +1805,7 @@ dependencies = [
  "mediagenerator-storage",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sqlx",
  "thiserror 2.0.20",
  "time",

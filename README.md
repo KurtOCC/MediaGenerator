@@ -6,7 +6,7 @@ en prompt. Genereringen skjer mot Microsoft Azure AI Foundry / Azure OpenAI.
 
 Hele applikasjonen er skrevet i Rust.
 
-> **Status:** Fase 5 av 6 er ferdig. Se [Leveranseplan](#leveranseplan).
+> **Status:** Alle seks faser er ferdige. Se [Leveranseplan](#leveranseplan).
 
 ---
 
@@ -20,6 +20,8 @@ Hele applikasjonen er skrevet i Rust.
 - [Jobbmodellen](#jobbmodellen)
 - [Generering mot Azure](#generering-mot-azure)
 - [Lagring og lenker](#lagring-og-lenker)
+- [Historikk og arkiv](#historikk-og-arkiv)
+- [Rate limiting og oppbevaring](#rate-limiting-og-oppbevaring)
 - [Miljøvariabler](#miljøvariabler)
 - [Entra ID – app-registrering steg for steg](#entra-id--app-registrering-steg-for-steg)
 - [Azure-ressurser som må opprettes](#azure-ressurser-som-må-opprettes)
@@ -184,10 +186,11 @@ vanilla-JS-skript. Ingen React, ingen Node i runtime.
 | Rute | Innhold |
 | --- | --- |
 | `GET /` | Generatoren: hero, promptfelt, medietypevalg, forslag, «Generert» |
-| `GET /historikk` | Brukerens egne genereringer (fylles i fase 6) |
-| `GET /eksempler` | Arkiv over generert innhold (fylles i fase 6) |
+| `GET /historikk` | Brukerens egne genereringer, paginert, feil inkludert |
+| `GET /eksempler` | Arkiv med egne/alle, medietypefilter og sortering |
 | `POST /api/generate` | Tar imot en generering og svarer med resultatkortet |
 | `GET /api/me` | Innlogget bruker som JSON |
+| `GET /api/assets/{id}` | Eierskapssjekk, så omdirigering til fersk SAS |
 
 Komponentene ligger som én fil hver under [templates/partials/](templates/partials/)
 uten logikk i seg. Det er det som holder Leptos-alternativet åpent: komponentene
@@ -313,6 +316,47 @@ Signaturen er håndskrevet fra det dokumenterte oppsettet, og
 [crates/storage/tests/blob.rs](crates/storage/tests/blob.rs) kjører en ekte
 rundtur mot Azure: last opp, signer, hent uten legitimasjon, og verifiser at den
 usignerte URL-en avvises og at en utløpt signatur slutter å virke.
+
+## Historikk og arkiv
+
+`/historikk` er dine egne genereringer, **feil inkludert** — poenget med en
+historikk er å se hva som skjedde, også det som ble avvist. `/eksempler` er det
+delte arkivet over ferdig media, med egne/alle, medietypefilter og sortering.
+
+Begge er samme spørring og samme mal; de skiller seg bare på filteret de starter
+fra. 24 rader per side.
+
+**Filtrene er vanlige lenker**, ikke skriptede kontroller. Da virker de uten
+JavaScript, overlever en oppdatering, og kan bokmerkes og deles som URL. Å bytte
+ett filter beholder de andre, men hopper tilbake til side én — side fire av en
+liste som nettopp ble kortere viser ingenting.
+
+Eierskap avgjøres i `where`-betingelsen, ikke av kalleren. Et arkiv-kort viser
+hvem som laget det, og «Generert av deg» på dine egne.
+
+## Rate limiting og oppbevaring
+
+`RATE_LIMIT_PER_HOUR` (default 20) telles fra `jobs`-tabellen, ikke fra en
+teller i minnet. Det koster én spørring per innsending og gir tre ting: grensen
+overlever omstart, den holder på tvers av replikaer, og den kan ikke komme i
+utakt med det brukeren selv ser i historikken sin. Sjekken skjer *før* raden
+skrives, så en avvist generering ikke selv teller mot grensen. Verdien `0` slår
+den av.
+
+Når det er fem eller færre igjen, vises det under promptfeltet. En teller som
+alltid står der er støy; en som bare dukker opp som et avslag er en overraskelse.
+
+`RETENTION_DAYS` (default 90) håndheves av en bakgrunnsjobb som går daglig.
+Rekkefølgen er ikke tilfeldig: blob-stiene leses først, så slettes blobene, så
+slettes jobbradene. Motsatt vei ville kaskaden fjernet asset-radene og etterlatt
+filene foreldreløse i containeren.
+
+**Audit-loggen ryddes bevisst ikke.** Den registrerer hvem som gjorde hva og når,
+aldri prompten. Et ansvarsspor som sletter seg selv i takt med innholdet er ikke
+noe ansvarsspor. Å fjerne det er en policy-avgjørelse, ikke en teknisk.
+
+Det som logges: innlogging, utlogging, forespurt generering, og hver gang media
+faktisk forlater den private containeren.
 
 ---
 
@@ -612,6 +656,20 @@ revisjonssporet skal ikke stille bli en ekstra kopi av innholdet.
 foran prosessen, så peer-adressen er ingressen. Headeren brukes aldri til en
 tilgangsavgjørelse, og en forfalsket verdi kan derfor ikke gi noen noe.
 
+**Rate limiting telles i databasen, ikke i minnet.** En teller i prosessen
+ville nullstilt seg ved omstart og vært ukjent for de andre replikaene. Prisen
+er én spørring per innsending; gevinsten er en grense som faktisk holder.
+
+**De destruktive testene tar eksklusiv tilgang til testdatabasen.**
+Oppbevaringstestene sletter alle jobber eldre enn null dager, altså alle.
+Uten en RwLock rundt tilgangen slettet de rader under føttene på testene som
+kjørte parallelt. Det fanget vi ved at to tester begynte å feile tilfeldig.
+
+**Arkivfiltrene ligger i URL-en, ikke i skript.** Da kan et filtrert søk
+deles og bokmerkes, det overlever en oppdatering, og det virker uten
+JavaScript. Ukjente verdier degraderer til standarden i stedet for å feile:
+en håndredigert URL skal ikke gi en feilside.
+
 **Video er implementert, men ikke verifisert mot en levende deployment.**
 `sora-2`-kvoten i abonnementet (30 av 30) er i sin helhet tildelt
 `magic-course-resource`, et annet prosjekt, så ingen Sora-deployment kunne
@@ -651,4 +709,4 @@ utelukkende server-side.
 | 3 | Statisk UI med Tailwind og HTMX, mock-generering | Ferdig |
 | 4 | Domenemodell, migrasjoner, sqlx-repository, jobbkø, SSE | Ferdig |
 | 5 | Azure-providers for bilde, lyd og video + Blob Storage og SAS | Ferdig (video ikke verifisert, se under) |
-| 6 | Historikk, eksempelgalleri, rate limiting, audit-logg, tester | Gjenstår |
+| 6 | Historikk, eksempelgalleri, rate limiting, audit-logg, tester | Ferdig |

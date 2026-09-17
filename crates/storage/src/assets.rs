@@ -104,3 +104,29 @@ pub async fn by_id_for_user(db: &Database, id: Uuid, user_id: Uuid) -> Result<As
 
     to_asset(&row)
 }
+
+/// Returns the blob paths of assets whose job is older than `days`.
+///
+/// Read before the rows are deleted: the cascade removes the asset row, and
+/// with it the only record of where the file lives. Without this the blobs
+/// would be orphaned in the container forever.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub async fn paths_older_than(db: &Database, days: i32) -> Result<Vec<String>, StorageError> {
+    let rows = sqlx::query(
+        "select a.blob_path
+         from assets a
+         join jobs j on j.id = a.job_id
+         where j.created_at < now() - make_interval(days => $1)",
+    )
+    .bind(days)
+    .fetch_all(db)
+    .await
+    .map_err(map_sqlx)?;
+
+    rows.iter()
+        .map(|row| row.try_get("blob_path").map_err(map_sqlx))
+        .collect()
+}
