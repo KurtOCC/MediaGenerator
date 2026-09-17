@@ -220,3 +220,61 @@ async fn a_reference_image_turns_the_call_into_an_edit() {
         media.bytes.len()
     );
 }
+
+#[tokio::test]
+async fn a_video_job_runs_to_a_finished_clip() {
+    let Some(providers) = providers() else {
+        eprintln!("skipped: {ENDPOINT_VAR} is not set");
+        return;
+    };
+
+    // The only genuinely asynchronous provider, and the slowest by far: a four
+    // second clip at the smallest frame size still takes minutes.
+    let job = providers
+        .video
+        .submit(request(
+            MediaType::Video,
+            "En rolig bølge som skyller inn over en steinete strand",
+            serde_json::json!({"n_seconds": 4, "size": "480x480"}),
+        ))
+        .await
+        .expect("the video job should be accepted");
+
+    let provider_job_id = job.id.clone().expect("an asynchronous job needs an id");
+    assert!(job.media.is_none(), "video cannot finish during submit");
+    eprintln!("sora job: {provider_job_id}");
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(600);
+    loop {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the clip never finished"
+        );
+        tokio::time::sleep(mediagenerator_providers::video::POLL_INTERVAL).await;
+
+        match providers
+            .video
+            .poll(&job)
+            .await
+            .expect("polling should work")
+        {
+            mediagenerator_providers::JobStatus::Running => continue,
+            mediagenerator_providers::JobStatus::Failed(error) => {
+                panic!("the clip failed: {error}")
+            }
+            mediagenerator_providers::JobStatus::Succeeded(media) => {
+                assert_eq!(media.content_type, "video/mp4");
+                assert_eq!(media.extension, "mp4");
+                assert!(
+                    media.bytes.len() > 10_000,
+                    "got {} bytes",
+                    media.bytes.len()
+                );
+                // An MP4 carries "ftyp" in the box header at offset 4.
+                assert_eq!(&media.bytes[4..8], b"ftyp", "expected MP4 bytes");
+                assert_eq!(media.duration_ms, Some(4_000));
+                return;
+            }
+        }
+    }
+}

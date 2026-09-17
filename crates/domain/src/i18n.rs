@@ -42,7 +42,7 @@ pub mod nb {
 
     // ----- Generator card -------------------------------------------------
     /// Placeholder text in the prompt textarea.
-    pub const PROMPT_PLACEHOLDER: &str = "Beskriv hva du ønsker å lage…";
+    pub const PROMPT_PLACEHOLDER: &str = "Beskriv mediet du vil generere…";
     /// Accessible label for the prompt textarea.
     pub const PROMPT_LABEL: &str = "Beskrivelse av det du vil generere";
     /// Label for the media type radio group.
@@ -67,12 +67,26 @@ pub mod nb {
     // ----- Model options ---------------------------------------------------
     /// Heading above the per-media-type options.
     pub const OPTIONS_LABEL: &str = "Valg";
+    /// Lead-in of the options summary. The media type name follows, then ")".
+    pub const OPTIONS_HINT: &str = "Disse valgene gjelder valgt medietype (";
+    /// Shown in the file control before anything is chosen.
+    pub const NO_FILE_CHOSEN: &str = "Ingen fil valgt";
+    /// Label on the file control button.
+    pub const CHOOSE_FILE: &str = "Velg fil";
 
     /// Label for the optional reference image.
     pub const REFERENCE_IMAGE: &str = "Referansebilde";
     /// Explains what a reference image does.
     pub const REFERENCE_IMAGE_HINT: &str =
         "Valgfritt. Last opp et bilde modellen skal ta utgangspunkt i.";
+    /// Shown when the uploaded reference is too large.
+    /// Explains what a reference image does for video.
+    ///
+    /// Different from the image case: Sora continues *from* the picture rather
+    /// than restyling it, so calling it a "reference" without qualification
+    /// would set the wrong expectation.
+    pub const REFERENCE_VIDEO_HINT: &str =
+        "Valgfritt. Bildet blir første bilde i klippet, og videoen fortsetter derfra.";
     /// Shown when the uploaded reference is too large.
     pub const ERR_REFERENCE_TOO_LARGE: &str = "Referansebildet er for stort. Maks 10 MB.";
     /// Shown when the uploaded reference is not an image we accept.
@@ -134,7 +148,10 @@ pub mod nb {
     /// Video: portrait frame.
     pub const VIDEO_PORTRAIT: &str = "Stående";
     /// Video: square frame.
-    pub const VIDEO_SQUARE: &str = "Kvadratisk";
+    /// Video: wide landscape frame.
+    pub const VIDEO_LANDSCAPE_WIDE: &str = "Liggende, bred";
+    /// Video: tall portrait frame.
+    pub const VIDEO_PORTRAIT_TALL: &str = "Stående, høy";
 
     /// Skip link shown to keyboard users at the top of every page.
     pub const SKIP_TO_CONTENT: &str = "Hopp til hovedinnhold";

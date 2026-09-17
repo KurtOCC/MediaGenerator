@@ -24,8 +24,11 @@
   --color-border: #232a38;
   --color-text: #e8ebf2;
   --color-text-muted: #8a93a6;
-  --color-accent: #2563eb;
-  --color-accent-hover: #3b82f6;
+  /* Violet, not the blue the original spec listed. The interface was
+     redesigned around the purple end of the hero gradient, so the accent
+     now sits in the same family as --gradient-from. */
+  --color-accent: #7c3aed;
+  --color-accent-hover: #8b5cf6;
   --color-gradient-from: #a78bfa;
   --color-gradient-to: #3b82f6;
 
@@ -41,6 +44,11 @@
     "Helvetica Neue", Arial, "Noto Sans", sans-serif;
 
   --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.25);
+
+  /* Glow under the primary button and the selected media type, so they
+     read as lit rather than merely coloured. */
+  --shadow-glow: 0 0 0 1px rgb(139 92 246 / 0.35), 0 8px 24px rgb(124 58 237 / 0.35);
+  --shadow-glow-soft: 0 0 0 1px rgb(139 92 246 / 0.3), 0 4px 16px rgb(124 58 237 / 0.22);
 }
 
 /*
@@ -96,46 +104,44 @@
 
 @layer components {
   /*
-   * Which option set is shown follows the checked media type, in CSS, so
-   * the controls switch without JavaScript. A hidden set is display:none,
-   * and the browser does not submit controls inside a hidden ancestor.
+   * Media type buttons. Compact: icon and label, no subtitle — the
+   * explanation moved into the options panel, which names the selected
+   * type in full.
    */
-  .valg {
-    display: none;
+  .medietype {
+    @apply flex cursor-pointer items-center gap-2.5 rounded-card border
+      border-border bg-surface-2 px-4 py-2.5 text-sm font-medium text-text-muted
+      transition-all;
   }
-  .generator:has(#medietype-bilde:checked) .valg[data-for="bilde"],
-  .generator:has(#medietype-lyd:checked) .valg[data-for="lyd"],
-  .generator:has(#medietype-video:checked) .valg[data-for="video"] {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-end;
+  .medietype:hover {
+    @apply border-accent-hover/60 bg-surface text-text;
   }
-
-  .velger {
-    @apply rounded-card border border-border bg-surface-2 px-3 py-2 text-sm
-      text-text;
+  label:has(:checked) > .medietype {
+    @apply border-accent bg-accent/15 text-text;
+    box-shadow: var(--shadow-glow-soft);
   }
-
-  /* File input. The browser button is styled through ::file-selector-button. */
-  .velger-fil {
-    @apply max-w-[18rem] rounded-card border border-border bg-surface-2 px-3 py-2
-      text-sm text-text-muted
-      file:mr-3 file:rounded-full file:border-0 file:bg-surface file:px-3 file:py-1
-      file:text-xs file:text-text;
+  label:has(:focus-visible) > .medietype {
+    outline: 2px solid var(--accent-hover);
+    outline-offset: 2px;
   }
 
   /*
-   * The submit button swaps between its label and a spinner. HTMX adds
-   * .htmx-request to the form while a request is in flight.
-   *
-   * Display is set here and nowhere else. A Tailwind `flex` utility on the
-   * spans would win the cascade — utilities are layered after components —
-   * and both would show at once, which is what shipped the first time.
+   * Primary action. A gradient and a glow rather than a flat fill, so it
+   * is unmistakably the thing to press.
    */
   .knapp-generer {
     display: flex;
     align-items: center;
     justify-content: center;
+    background-image: linear-gradient(135deg, var(--accent-hover), var(--accent));
+    box-shadow: var(--shadow-glow);
+  }
+  .knapp-generer:hover:not(:disabled) {
+    filter: brightness(1.12);
+  }
+  .knapp-generer:disabled {
+    background-image: none;
+    box-shadow: none;
   }
   .knapp-etikett,
   .knapp-spinner {
@@ -147,6 +153,69 @@
   }
   .generator.htmx-request .knapp-spinner {
     display: flex;
+  }
+
+  /*
+   * Options panel. A <details>, so it collapses and expands with no
+   * JavaScript and keeps keyboard operation and screen-reader semantics
+   * the platform already provides.
+   */
+  .valg-panel > summary {
+    @apply flex cursor-pointer list-none items-start justify-between gap-3
+      rounded-card px-1 py-1;
+  }
+  .valg-panel > summary::-webkit-details-marker {
+    display: none;
+  }
+  .valg-panel[open] .valg-pil {
+    transform: rotate(180deg);
+  }
+
+  /* Which option set is shown follows the checked media type, in CSS. */
+  .valg,
+  .valg-navn {
+    display: none;
+  }
+  .generator:has(#medietype-bilde:checked) .valg[data-for="bilde"],
+  .generator:has(#medietype-lyd:checked) .valg[data-for="lyd"],
+  .generator:has(#medietype-video:checked) .valg[data-for="video"] {
+    display: grid;
+    gap: 1rem;
+  }
+  .generator:has(#medietype-bilde:checked) .valg-navn[data-for="bilde"],
+  .generator:has(#medietype-lyd:checked) .valg-navn[data-for="lyd"],
+  .generator:has(#medietype-video:checked) .valg-navn[data-for="video"] {
+    display: inline;
+  }
+
+  .velger {
+    @apply w-full rounded-card border border-border bg-surface-2 px-3.5 py-2.5
+      text-sm text-text transition-colors;
+  }
+  .velger:hover {
+    @apply border-accent-hover/60;
+  }
+
+  /*
+   * File control. The native input is visually hidden but still focusable
+   * and still submits; the label opens the picker even without
+   * JavaScript, which only fills in the chosen file name.
+   */
+  .filvelger {
+    @apply flex w-full cursor-pointer items-center gap-3 rounded-card border
+      border-border bg-surface-2 py-2 pl-3.5 pr-2 text-sm text-text-muted
+      transition-colors;
+  }
+  .filvelger:hover {
+    @apply border-accent-hover/60;
+  }
+  .filvelger:has(:focus-visible) {
+    outline: 2px solid var(--accent-hover);
+    outline-offset: 2px;
+  }
+  .filvelger-knapp {
+    @apply ml-auto shrink-0 rounded-card border border-border bg-surface px-3.5
+      py-1.5 text-xs text-text;
   }
 
   /* Filter and sort controls. Links, not buttons: they change the URL. */

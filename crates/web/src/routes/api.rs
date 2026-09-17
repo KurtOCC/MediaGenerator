@@ -109,11 +109,13 @@ struct GenerateFields {
 impl GenerateFields {
     /// Builds the provider parameters for the selected media type.
     ///
-    /// Only the fields belonging to the chosen type are read. The browser does
-    /// not submit controls inside a hidden ancestor, so the others are normally
-    /// absent anyway — but a hand-crafted POST could carry all of them, and
-    /// silently applying a video length to an image would be worse than
-    /// ignoring it.
+    /// Only the fields belonging to the chosen type are read.
+    ///
+    /// Every control is submitted regardless of which option set is visible:
+    /// CSS has no bearing on form submission, and a collapsed `<details>`
+    /// submits its contents like anything else. Selecting here rather than
+    /// trusting the form is what makes that harmless — and it is also what
+    /// stops a hand-crafted POST applying a video length to an image.
     ///
     /// Values are not validated here. Each provider clamps or falls back to its
     /// own default, which keeps the rules next to the API that imposes them.
@@ -126,6 +128,7 @@ impl GenerateFields {
             }),
             MediaType::Audio => serde_json::json!({ "voice": self.audio_voice }),
             MediaType::Video => serde_json::json!({
+                "reference_path": reference_path,
                 "n_seconds": self.video_seconds,
                 "size": self.video_size,
             }),
@@ -149,7 +152,7 @@ async fn read_fields(mut multipart: Multipart) -> Result<GenerateFields, AppErro
     {
         let name = field.name().unwrap_or_default().to_owned();
 
-        if name == "reference" {
+        if name == "reference" || name == "reference_video" {
             let content_type = field.content_type().unwrap_or_default().to_owned();
             let file_name = field.file_name().unwrap_or("referanse").to_owned();
             let bytes = field
@@ -239,7 +242,8 @@ async fn generate(
     // The reference is stored rather than held in memory: the worker that picks
     // the job up may be a different one, minutes later, after a restart.
     let reference_path = match (media_type, fields.reference.as_ref()) {
-        (MediaType::Image, Some((file_name, bytes))) => {
+        // Both image and video accept one; audio does not.
+        (MediaType::Image | MediaType::Video, Some((file_name, bytes))) => {
             let path = format!(
                 "referanser/{}.{}",
                 Uuid::new_v4(),

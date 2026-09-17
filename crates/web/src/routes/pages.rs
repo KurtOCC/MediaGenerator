@@ -244,19 +244,19 @@ mod tests {
 
         // Generator
         assert!(html.contains(nb::PROMPT_PLACEHOLDER));
-        assert!(html.contains("0/4000"));
+        assert!(html.contains("0 / 4000"));
         assert!(html.contains(nb::GENERATE));
         assert!(html.contains(nb::GENERATING));
 
-        // All three media types, with their subtitles
-        for (title, subtitle) in [
-            (nb::MEDIA_IMAGE, nb::MEDIA_IMAGE_SUB),
-            (nb::MEDIA_AUDIO, nb::MEDIA_AUDIO_SUB),
-            (nb::MEDIA_VIDEO, nb::MEDIA_VIDEO_SUB),
-        ] {
+        // The three media type buttons. The subtitles moved into the options
+        // panel, which names the selected type instead.
+        for title in [nb::MEDIA_IMAGE, nb::MEDIA_AUDIO, nb::MEDIA_VIDEO] {
             assert!(html.contains(title), "missing {title}");
-            assert!(html.contains(subtitle), "missing {subtitle}");
         }
+
+        // The options panel is collapsed: a <details> with no `open`.
+        assert!(html.contains("<details"));
+        assert!(!html.contains("<details open"));
 
         // Suggestions, generated section and footer
         // The suggestion chips are gone; the per-media-type options replaced

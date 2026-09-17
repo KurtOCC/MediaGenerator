@@ -25,6 +25,7 @@ const TEKST = {
   visForAndre: "Vis for andre",
   bekreftSlett: "Slette denne for godt? Det kan ikke angres.",
   handlingFeilet: "Handlingen kunne ikke fullfores",
+  ingenFil: "Ingen fil valgt",
 };
 
 /**
@@ -266,10 +267,31 @@ function kobleArkivhandlinger() {
   });
 }
 
+/**
+ * Shows the chosen file name in the custom file control.
+ *
+ * The label opens the picker on its own, so the control works without this;
+ * all the script adds is the name of what was picked.
+ *
+ * @param {HTMLFormElement} skjema
+ */
+function kobleFilvelger(skjema) {
+  const felt = skjema.querySelector("input[type=file][data-filnavn]");
+  const navn = skjema.querySelector(".filnavn");
+  if (!felt || !navn) return;
+
+  felt.addEventListener("change", () => {
+    const valgt = felt.files?.[0];
+    navn.textContent = valgt ? valgt.name : TEKST.ingenFil;
+    navn.classList.toggle("text-text", Boolean(valgt));
+  });
+}
+
 function start() {
   const skjema = document.querySelector("#generator");
   if (skjema) {
     koblePromptTeller(skjema);
+    kobleFilvelger(skjema);
   }
 
   kobleArkivhandlinger();
