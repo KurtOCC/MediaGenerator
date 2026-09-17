@@ -6,7 +6,7 @@
 # with a non-root user; distroless is not used because the runtime needs the
 # CA bundle and a shell-less healthcheck is harder to express there.
 
-ARG RUST_VERSION=1.90
+ARG RUST_VERSION=1.98
 ARG DEBIAN_RELEASE=bookworm
 
 # --- planner --------------------------------------------------------------

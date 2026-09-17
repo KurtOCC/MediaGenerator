@@ -126,6 +126,21 @@ curl -i http://localhost:8080/ready
 Åpne deretter <http://localhost:8080> i en nettleser. Du blir sendt til Entra ID,
 og etter innlogging tilbake til forsiden.
 
+### Bygg container-image lokalt
+
+Uten Docker installert kan imaget bygges i ACR. Bygg fra en ren kontekst,
+ikke fra arbeidskatalogen:
+
+```bash
+# `az acr build` pakker arbeidskatalogen uten a bry seg om .dockerignore, og
+# target/ er fort titalls gigabyte. git archive gir bare sporede filer.
+mkdir -p /tmp/mgbuild && git archive --format=tar HEAD | tar -x -C /tmp/mgbuild
+(cd /tmp/mgbuild && az acr build --registry <acr> --image mediagenerator:v1 \
+   --file Dockerfile --platform linux/amd64 .)
+```
+
+I CI er dette ikke et problem: en fersk `actions/checkout` har ingen `target/`.
+
 ### Bygg CSS
 
 Tailwind kjøres som frittstående binær. Ingen npm, ingen `node_modules`.
