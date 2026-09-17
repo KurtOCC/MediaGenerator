@@ -10,7 +10,7 @@ authors.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 askama = "0.16.1"
-axum = { version = "0.8.9", features = ["macros"] }
+axum = { version = "0.8.9", features = ["macros", "multipart"] }
 dotenvy = "0.15.7"
 figment = { version = "0.10.19", features = ["env"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }

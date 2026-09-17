@@ -57,7 +57,9 @@
   id="generator"
   method="post"
   action="/api/generate"
+  enctype="multipart/form-data"
   hx-post="/api/generate"
+  hx-encoding="multipart/form-data"
   hx-target="#resultat"
   hx-swap="innerHTML"
 >
@@ -137,6 +139,16 @@
 
       <div class="valg mt-3 gap-4" data-for="bilde">
         <label class="flex flex-col gap-1">
+          <span class="text-xs text-text-muted">{{ nb::REFERENCE_IMAGE }}</span>
+          <input
+            type="file"
+            name="reference"
+            accept="image/png,image/jpeg,image/webp"
+            class="velger-fil"
+          />
+          <span class="text-[11px] text-text-muted">{{ nb::REFERENCE_IMAGE_HINT }}</span>
+        </label>
+        <label class="flex flex-col gap-1">
           <span class="text-xs text-text-muted">{{ nb::IMAGE_SIZE }}</span>
           <select name="image_size" class="velger">
             <option value="1024x1024">{{ nb::IMAGE_SIZE_SQUARE }} &middot; 1024&times;1024</option>
@@ -155,6 +167,7 @@
       </div>
 
       <div class="valg mt-3 gap-4" data-for="lyd">
+        <p class="w-full text-[11px] text-text-muted">{{ nb::AUDIO_HINT }}</p>
         <label class="flex flex-col gap-1">
           <span class="text-xs text-text-muted">{{ nb::AUDIO_VOICE }}</span>
           <select name="audio_voice" class="velger">

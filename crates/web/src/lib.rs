@@ -40,8 +40,17 @@ pub use config::AppConfig;
 pub use error::{AppError, AppResult};
 pub use state::AppState;
 
-/// Largest accepted request body. Prompts are text, so this is generous.
+/// Largest accepted body on the routes that take no upload.
+///
+/// Prompts are text, so this is generous for everything but the reference
+/// image, which has its own limit on the API router.
 const MAX_BODY_BYTES: usize = 256 * 1024;
+
+/// Largest accepted body on `/api/*`, which carries the reference image.
+///
+/// A little above the 10 MB the upload itself allows, to leave room for the
+/// multipart framing and the other fields.
+const MAX_UPLOAD_BYTES: usize = 12 * 1024 * 1024;
 
 /// Upper bound on how long a single request may take.
 ///
@@ -99,6 +108,7 @@ where
     // issued by HTMX, which sends the header; the sign-out form is an ordinary
     // browser POST, covered by the origin check and the SameSite=Lax cookie.
     let api = routes::api::router()
+        .layer(RequestBodyLimitLayer::new(MAX_UPLOAD_BYTES))
         .layer(from_fn(middleware::csrf::verify_token))
         .layer(timeout);
 
@@ -110,6 +120,10 @@ where
     // would sever it every 30 seconds.
     let protected = routes::pages::router()
         .merge(routes::archive::router())
+        // The small limit is applied to the page routes, not globally: an
+        // outer limit would cap the API router, which needs a larger one for
+        // the reference image.
+        .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(timeout)
         .merge(api)
         .merge(routes::api::stream_router())
@@ -117,8 +131,16 @@ where
         .layer(from_fn(require_auth));
 
     Router::new()
-        .merge(routes::health::router().layer(timeout))
-        .merge(routes::auth::router().layer(timeout))
+        .merge(
+            routes::health::router()
+                .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
+                .layer(timeout),
+        )
+        .merge(
+            routes::auth::router()
+                .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
+                .layer(timeout),
+        )
         .merge(protected)
         .nest_service("/assets", assets)
         // Set outside the guarded router: without this, the guards would also
@@ -127,7 +149,6 @@ where
         .fallback(not_found)
         .layer(session_layer)
         .layer(from_fn_with_state(origin, middleware::csrf::verify_origin))
-        .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         // Inside the compression layer, deliberately. Placed outside it, this
         // would be handed a gzipped body it cannot parse, and would silently
         // pass the JSON through — which is exactly what happened the first

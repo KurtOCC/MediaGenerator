@@ -72,9 +72,8 @@ impl ProviderError {
             Self::Timeout => nb::ERR_GENERATION_TIMEOUT,
             Self::Validation(_) => nb::ERR_VALIDATION,
             Self::Upstream(_) | Self::Malformed(_) => nb::ERR_UPSTREAM,
-            Self::Unauthorized | Self::DeploymentNotFound(_) | Self::Internal(_) => {
-                nb::ERR_INTERNAL
-            }
+            Self::DeploymentNotFound(_) => nb::ERR_NOT_DEPLOYED,
+            Self::Unauthorized | Self::Internal(_) => nb::ERR_INTERNAL,
         }
     }
 

@@ -13,7 +13,8 @@ use std::{sync::Arc, time::Duration};
 
 use mediagenerator_domain::{ErrorCode, Job, JobStatus, MediaType, NewAsset, i18n::nb};
 use mediagenerator_providers::{
-    GeneratedMedia, GenerationRequest, JobStatus as ProviderStatus, Providers, video::POLL_INTERVAL,
+    GeneratedMedia, GenerationRequest, JobStatus as ProviderStatus, Providers, ReferenceImage,
+    video::POLL_INTERVAL,
 };
 use mediagenerator_storage::{BlobStore, Database, assets, jobs};
 use tokio::sync::{broadcast, mpsc};
@@ -190,11 +191,33 @@ async fn process(runtime: &Runtime, events: &broadcast::Sender<JobEvent>, job_id
 async fn generate(runtime: &Runtime, job: &Job) -> Result<GeneratedMedia, JobStatus> {
     let provider = runtime.providers.for_media(job.media_type);
 
+    // The reference was stored when the job was created; read it back now.
+    // A reference that cannot be read fails the job rather than quietly
+    // generating something unrelated to what the user uploaded.
+    let reference = match reference_path(job) {
+        Some(path) => match runtime.blobs.download(path).await {
+            Ok(bytes) => Some(ReferenceImage {
+                content_type: content_type_for(path).to_owned(),
+                file_name: file_name_of(path),
+                bytes,
+            }),
+            Err(error) => {
+                tracing::error!(%error, path, job_id = %job.id, "could not read the reference image");
+                return Err(JobStatus::Failed {
+                    code: ErrorCode::Internal,
+                    message: nb::ERR_INTERNAL.to_owned(),
+                });
+            }
+        },
+        None => None,
+    };
+
     let request = GenerationRequest {
         media_type: job.media_type,
         prompt: job.prompt.clone(),
         parameters: job.parameters.clone(),
         correlation_id: job.id.to_string(),
+        reference,
     };
 
     let submitted = provider.submit(request).await.map_err(failed)?;
@@ -332,4 +355,82 @@ mod tests {
         assert!(blob_path(id, MediaType::Audio, "mp3").contains("/audio/"));
         assert!(blob_path(id, MediaType::Video, "mp4").contains("/video/"));
     }
+}
+
+/// Returns the stored reference image path from a job's parameters.
+fn reference_path(job: &Job) -> Option<&str> {
+    job.parameters
+        .get("reference_path")
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.is_empty())
+}
+
+/// Guesses the content type of a stored reference from its extension.
+///
+/// The blob is written with a generic type so nothing downstream can be fooled
+/// by a declared one; the provider needs a real type on the multipart part, and
+/// the extension is what we controlled when storing it.
+fn content_type_for(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or_default() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        _ => "image/png",
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+
+    /// A job with the fields these tests care about.
+    fn a_job(parameters: serde_json::Value) -> Job {
+        Job {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            media_type: MediaType::Image,
+            prompt: "test".to_owned(),
+            parameters,
+            status: JobStatus::Queued,
+            provider_job_id: None,
+            created_at: time::OffsetDateTime::now_utc(),
+            started_at: None,
+            completed_at: None,
+        }
+    }
+    #[test]
+    fn a_missing_or_empty_reference_is_none() {
+        let job = a_job(serde_json::json!({}));
+        assert_eq!(reference_path(&job), None);
+
+        let job = a_job(serde_json::json!({ "reference_path": "" }));
+        assert_eq!(reference_path(&job), None);
+
+        let job = a_job(serde_json::json!({ "reference_path": serde_json::Value::Null }));
+        assert_eq!(reference_path(&job), None);
+    }
+
+    #[test]
+    fn a_stored_reference_is_found() {
+        let job = a_job(serde_json::json!({ "reference_path": "referanser/abc.png" }));
+        assert_eq!(reference_path(&job), Some("referanser/abc.png"));
+    }
+
+    #[test]
+    fn the_content_type_follows_the_extension_we_chose() {
+        assert_eq!(content_type_for("referanser/a.png"), "image/png");
+        assert_eq!(content_type_for("referanser/a.jpg"), "image/jpeg");
+        assert_eq!(content_type_for("referanser/a.jpeg"), "image/jpeg");
+        assert_eq!(content_type_for("referanser/a.webp"), "image/webp");
+        // Anything unexpected falls back rather than guessing.
+        assert_eq!(content_type_for("referanser/a"), "image/png");
+    }
+}
+
+/// Returns the last path segment, for the multipart file name.
+fn file_name_of(path: &str) -> String {
+    path.rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("referanse.png")
+        .to_owned()
 }

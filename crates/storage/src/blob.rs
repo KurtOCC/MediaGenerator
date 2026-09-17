@@ -192,6 +192,42 @@ impl BlobStore {
         Ok(())
     }
 
+    /// Downloads a blob.
+    ///
+    /// Used for reference images: the upload is stored when the job is
+    /// created and read back by whichever worker picks the job up, which may
+    /// be minutes later and after a restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blob is missing or unreadable.
+    pub async fn download(&self, path: &str) -> Result<Vec<u8>, StorageError> {
+        let url = format!("{}/{}/{}", self.endpoint(), self.container, path);
+        let token = self.token().await?;
+
+        let response = self
+            .http
+            .get(&url)
+            .bearer_auth(token)
+            .header("x-ms-version", API_VERSION)
+            .send()
+            .await
+            .map_err(|error| StorageError::Blob(error.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(StorageError::Blob(format!(
+                "download failed with {}",
+                response.status()
+            )));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| StorageError::Blob(error.to_string()))?;
+        Ok(bytes.to_vec())
+    }
+
     /// Returns the cached delegation key, fetching a new one when needed.
     async fn delegation_key(&self) -> Result<DelegationKey, StorageError> {
         if let Some(key) = self.delegation_key.read().await.as_ref()

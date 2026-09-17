@@ -53,6 +53,7 @@ fn request(
         prompt: prompt.to_owned(),
         parameters,
         correlation_id: "live-test".to_owned(),
+        reference: None,
     }
 }
 
@@ -168,5 +169,54 @@ async fn a_prompt_over_the_speech_limit_is_refused_without_calling_azure() {
             mediagenerator_providers::ProviderError::Validation(_)
         ),
         "got {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_reference_image_turns_the_call_into_an_edit() {
+    let Some(providers) = providers() else {
+        eprintln!("skipped: {ENDPOINT_VAR} is not set");
+        return;
+    };
+
+    // A 1x1 PNG is enough: this test is about the multipart request shape and
+    // the edits endpoint, not about what comes out the other end.
+    const TINY_PNG: [u8; 69] = [
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xdd, 0x8d, 0xb0, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    let mut request = request(
+        MediaType::Image,
+        "Gjør bakgrunnen mørkeblå",
+        serde_json::json!({"size": "1024x1024", "quality": "low"}),
+    );
+    request.reference = Some(mediagenerator_providers::ReferenceImage {
+        bytes: TINY_PNG.to_vec(),
+        content_type: "image/png".to_owned(),
+        file_name: "referanse.png".to_owned(),
+    });
+
+    let job = providers
+        .image
+        .submit(request)
+        .await
+        .expect("an image edit should succeed");
+
+    let media = job.media.expect("the edited image should be attached");
+    assert_eq!(media.content_type, "image/png");
+    assert_eq!(
+        &media.bytes[..8],
+        &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a],
+        "expected a PNG signature"
+    );
+    // Far larger than the 67-byte input, so it is genuinely a new image.
+    assert!(
+        media.bytes.len() > 10_000,
+        "got {} bytes",
+        media.bytes.len()
     );
 }

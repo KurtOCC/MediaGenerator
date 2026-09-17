@@ -59,7 +59,32 @@ pub struct GenerationRequest {
     /// Provider parameters as stored on the job.
     pub parameters: serde_json::Value,
     /// Correlation ID of the request that started this, for log stitching.
+    /// Optional reference image the model should work from.
+    ///
+    /// Present only for image jobs with an upload. It turns the call into an
+    /// edit rather than a generation, which is a different endpoint.
+    pub reference: Option<ReferenceImage>,
     pub correlation_id: String,
+}
+
+/// An image the user uploaded for the model to work from.
+#[derive(Clone)]
+pub struct ReferenceImage {
+    /// The file itself.
+    pub bytes: Vec<u8>,
+    /// MIME type, as validated on upload.
+    pub content_type: String,
+    /// File name sent to the provider. Only the extension matters to it.
+    pub file_name: String,
+}
+
+impl std::fmt::Debug for ReferenceImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReferenceImage")
+            .field("content_type", &self.content_type)
+            .field("bytes", &format_args!("{} bytes", self.bytes.len()))
+            .finish()
+    }
 }
 
 /// Finished media, still in memory and not yet stored.

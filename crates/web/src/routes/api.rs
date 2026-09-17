@@ -12,7 +12,7 @@ use std::{convert::Infallible, time::Duration};
 use askama::Template;
 use axum::{
     Extension, Json, Router,
-    extract::{Form, Path, State},
+    extract::{Form, Multipart, Path, State},
     http::StatusCode,
     response::{
         Redirect, Sse,
@@ -83,48 +83,46 @@ async fn me(Extension(user): Extension<SessionUser>) -> Json<MeBody> {
     })
 }
 
-/// Form body posted by the generator.
-#[derive(Debug, Deserialize)]
-struct GenerateForm {
-    /// What the user wants generated.
-    prompt: String,
-    /// Which kind of media to produce.
-    media_type: MediaType,
+/// Largest reference image accepted, in bytes.
+const MAX_REFERENCE_BYTES: usize = 10 * 1024 * 1024;
 
-    /// Image size, e.g. `1024x1024`. Only submitted for images.
-    #[serde(default)]
+/// Image types the reference upload accepts.
+const REFERENCE_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];
+
+/// What the multipart form carried.
+///
+/// The form is multipart rather than urlencoded because of the optional
+/// reference image, so the fields are read by hand instead of by `serde`.
+#[derive(Debug, Default)]
+struct GenerateFields {
+    prompt: String,
+    media_type: Option<MediaType>,
     image_size: Option<String>,
-    /// Image quality: `low`, `medium` or `high`.
-    #[serde(default)]
     image_quality: Option<String>,
-    /// Speech voice name.
-    #[serde(default)]
     audio_voice: Option<String>,
-    /// Video length in seconds.
-    #[serde(default)]
     video_seconds: Option<u32>,
-    /// Video frame size, e.g. `1280x720`.
-    #[serde(default)]
     video_size: Option<String>,
+    /// File name and bytes of the uploaded reference, when there is one.
+    reference: Option<(String, Vec<u8>)>,
 }
 
-impl GenerateForm {
+impl GenerateFields {
     /// Builds the provider parameters for the selected media type.
     ///
-    /// Only the fields belonging to the chosen type are read. The browser
-    /// does not submit controls inside a hidden ancestor, so the others are
-    /// normally absent anyway — but a hand-crafted POST could carry all of
-    /// them, and silently using a video length on an image would be worse
-    /// than ignoring it.
+    /// Only the fields belonging to the chosen type are read. The browser does
+    /// not submit controls inside a hidden ancestor, so the others are normally
+    /// absent anyway — but a hand-crafted POST could carry all of them, and
+    /// silently applying a video length to an image would be worse than
+    /// ignoring it.
     ///
-    /// Values are not validated here. Each provider clamps or falls back to
-    /// its own default, which keeps the rules next to the API that imposes
-    /// them.
-    fn parameters(&self) -> serde_json::Value {
-        match self.media_type {
+    /// Values are not validated here. Each provider clamps or falls back to its
+    /// own default, which keeps the rules next to the API that imposes them.
+    fn parameters(&self, media_type: MediaType, reference_path: Option<&str>) -> serde_json::Value {
+        match media_type {
             MediaType::Image => serde_json::json!({
                 "size": self.image_size,
                 "quality": self.image_quality,
+                "reference_path": reference_path,
             }),
             MediaType::Audio => serde_json::json!({ "voice": self.audio_voice }),
             MediaType::Video => serde_json::json!({
@@ -135,27 +133,134 @@ impl GenerateForm {
     }
 }
 
+/// Reads the generate form.
+///
+/// # Errors
+///
+/// Returns a validation error when a part is malformed, the upload is larger
+/// than [`MAX_REFERENCE_BYTES`], or it is not an image type we accept.
+async fn read_fields(mut multipart: Multipart) -> Result<GenerateFields, AppError> {
+    let mut fields = GenerateFields::default();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| AppError::Validation(error.body_text()))?
+    {
+        let name = field.name().unwrap_or_default().to_owned();
+
+        if name == "reference" {
+            let content_type = field.content_type().unwrap_or_default().to_owned();
+            let file_name = field.file_name().unwrap_or("referanse").to_owned();
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|error| AppError::Validation(error.body_text()))?;
+
+            // An untouched file input still submits an empty part.
+            if bytes.is_empty() {
+                continue;
+            }
+            if bytes.len() > MAX_REFERENCE_BYTES {
+                return Err(AppError::Validation(nb::ERR_REFERENCE_TOO_LARGE.to_owned()));
+            }
+            // The declared type is checked, not trusted: it decides nothing but
+            // whether we accept the file at all, and the provider validates the
+            // actual bytes.
+            if !REFERENCE_TYPES.contains(&content_type.as_str()) {
+                return Err(AppError::Validation(nb::ERR_REFERENCE_TYPE.to_owned()));
+            }
+
+            fields.reference = Some((file_name, bytes.to_vec()));
+            continue;
+        }
+
+        let value = field
+            .text()
+            .await
+            .map_err(|error| AppError::Validation(error.body_text()))?;
+
+        match name.as_str() {
+            "prompt" => fields.prompt = value,
+            "media_type" => fields.media_type = value.parse().ok(),
+            "image_size" => fields.image_size = Some(value),
+            "image_quality" => fields.image_quality = Some(value),
+            "audio_voice" => fields.audio_voice = Some(value),
+            "video_seconds" => fields.video_seconds = value.parse().ok(),
+            "video_size" => fields.video_size = Some(value),
+            // Unknown fields are ignored rather than refused: a control added
+            // to a newer page should not break an instance still running the
+            // older code.
+            _ => {}
+        }
+    }
+
+    Ok(fields)
+}
+
+/// Returns the file extension of an uploaded name, defaulting to `png`.
+fn reference_extension(file_name: &str) -> String {
+    let candidate = file_name
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+
+    if candidate.is_empty()
+        || candidate.len() > 5
+        || !candidate.chars().all(|c| c.is_ascii_alphanumeric())
+    {
+        // The name comes from the client, and it ends up in a blob path.
+        return "png".to_owned();
+    }
+    candidate
+}
+
 /// Accepts a generation request and returns the card for the queued job.
 async fn generate(
     State(state): State<AppState>,
     session: Session,
     Extension(user): Extension<SessionUser>,
     client: ClientInfo,
-    Form(form): Form<GenerateForm>,
+    multipart: Multipart,
 ) -> Result<Page<JobCardTemplate>, AppError> {
-    let prompt = validate_prompt(&form.prompt, state.config.max_prompt_chars)?;
+    let fields = read_fields(multipart).await?;
+    let media_type = fields
+        .media_type
+        .ok_or_else(|| AppError::Validation(nb::ERR_UNKNOWN_MEDIA_TYPE.to_owned()))?;
+
+    let prompt = validate_prompt(&fields.prompt, state.config.max_prompt_chars)?;
     let user_id = local_user_id(&state.db, &session, &user).await?;
 
     // Checked before the row is written, so a refused generation leaves no
     // trace in the history and does not itself count towards the limit.
     ratelimit::check(&state.db, user_id, state.config.rate_limit_per_hour).await?;
 
+    // The reference is stored rather than held in memory: the worker that picks
+    // the job up may be a different one, minutes later, after a restart.
+    let reference_path = match (media_type, fields.reference.as_ref()) {
+        (MediaType::Image, Some((file_name, bytes))) => {
+            let path = format!(
+                "referanser/{}.{}",
+                Uuid::new_v4(),
+                reference_extension(file_name)
+            );
+            state
+                .blobs
+                .upload(&path, "application/octet-stream", bytes.clone())
+                .await
+                .map_err(|error| AppError::Internal(anyhow::Error::new(error)))?;
+            Some(path)
+        }
+        _ => None,
+    };
+
     let job = jobs::create(
         &state.db,
         &NewJob {
             user_id,
-            media_type: form.media_type,
-            parameters: form.parameters(),
+            media_type,
+            parameters: fields.parameters(media_type, reference_path.as_deref()),
             prompt,
         },
     )
@@ -196,6 +301,7 @@ async fn generate(
         job_id = %job.id,
         media_type = %job.media_type,
         prompt_chars = job.prompt.chars().count(),
+        reference = reference_path.is_some(),
         "generation queued"
     );
 

@@ -54,7 +54,7 @@ pub mod nb {
     /// Media type: audio.
     pub const MEDIA_AUDIO: &str = "Lyd";
     /// Media type: audio, subtitle.
-    pub const MEDIA_AUDIO_SUB: &str = "Tale, musikk og lydeffekter";
+    pub const MEDIA_AUDIO_SUB: &str = "Tekst lest opp som tale";
     /// Media type: video.
     pub const MEDIA_VIDEO: &str = "Video";
     /// Media type: video, subtitle.
@@ -67,6 +67,16 @@ pub mod nb {
     // ----- Model options ---------------------------------------------------
     /// Heading above the per-media-type options.
     pub const OPTIONS_LABEL: &str = "Valg";
+
+    /// Label for the optional reference image.
+    pub const REFERENCE_IMAGE: &str = "Referansebilde";
+    /// Explains what a reference image does.
+    pub const REFERENCE_IMAGE_HINT: &str =
+        "Valgfritt. Last opp et bilde modellen skal ta utgangspunkt i.";
+    /// Shown when the uploaded reference is too large.
+    pub const ERR_REFERENCE_TOO_LARGE: &str = "Referansebildet er for stort. Maks 10 MB.";
+    /// Shown when the uploaded reference is not an image we accept.
+    pub const ERR_REFERENCE_TYPE: &str = "Referansebildet må være PNG, JPEG eller WebP.";
 
     /// Image: label for the size control.
     pub const IMAGE_SIZE: &str = "Størrelse";
@@ -84,6 +94,14 @@ pub mod nb {
     pub const QUALITY_MEDIUM: &str = "Middels";
     /// Image quality: slowest and most detailed.
     pub const QUALITY_HIGH: &str = "Høy (tar lengst tid)";
+
+    /// Explains what the audio model actually does.
+    ///
+    /// The only audio models available in Foundry are text-to-speech. Saying
+    /// so plainly stops someone asking for background music and getting
+    /// their request read aloud instead.
+    pub const AUDIO_HINT: &str =
+        "Teksten over leses opp ord for ord. Modellen lager ikke musikk eller lydeffekter.";
 
     /// Audio: label for the voice control.
     pub const AUDIO_VOICE: &str = "Stemme";
@@ -258,6 +276,13 @@ pub mod nb {
     pub const ERR_CONTENT_FILTER: &str =
         "Beskrivelsen ble avvist av innholdsfilteret. Prøv å formulere den annerledes.";
     /// Shown when an upstream Azure service failed or timed out.
+    /// Shown when the deployment a media type needs does not exist.
+    ///
+    /// An operator problem, but a specific one: telling the user which
+    /// media type is unavailable beats a generic apology.
+    pub const ERR_NOT_DEPLOYED: &str =
+        "Denne medietypen er ikke satt opp ennå. Si fra til Oslofjord IT.";
+
     pub const ERR_UPSTREAM: &str =
         "AI-tjenesten svarer ikke akkurat nå. Prøv igjen om noen minutter.";
     /// Shown when the CSRF token is missing or does not match.

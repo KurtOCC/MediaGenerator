@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::{
     Credentials, GeneratedMedia, GenerationRequest, JobStatus, MediaProvider, ProviderJob,
-    client::send_with_retry, config::ProviderConfig, error::ProviderError,
+    ReferenceImage, client::send_with_retry, config::ProviderConfig, error::ProviderError,
 };
 
 /// Default image size when the job carries no preference.
@@ -67,6 +67,16 @@ impl MediaProvider for ImageProvider {
         let size = string_param(&req.parameters, "size", DEFAULT_SIZE);
         let quality = string_param(&req.parameters, "quality", DEFAULT_QUALITY);
 
+        // With a reference image this becomes an *edit* rather than a
+        // generation: a different endpoint, and multipart instead of JSON.
+        // The prompt then describes what to do with the image rather than
+        // what to draw from nothing.
+        if let Some(reference) = req.reference {
+            return self
+                .edit(&req.prompt, &req.correlation_id, reference, &size, &quality)
+                .await;
+        }
+
         let body = serde_json::json!({
             "model": self.config.image_deployment,
             "prompt": req.prompt,
@@ -95,32 +105,7 @@ impl MediaProvider for ImageProvider {
         )
         .await?;
 
-        let parsed: ImagesResponse = response
-            .json()
-            .await
-            .map_err(|error| ProviderError::Malformed(error.to_string()))?;
-
-        let first = parsed
-            .data
-            .into_iter()
-            .next()
-            .ok_or_else(|| ProviderError::Malformed("no image in the response".to_owned()))?;
-
-        let Some(encoded) = first.b64_json else {
-            // A deployment configured to return URLs would need a second fetch
-            // before the bytes could be stored. Refusing loudly beats silently
-            // handing the browser a provider URL.
-            let hint = if first.url.is_some() {
-                "the deployment returned a URL; expected base64"
-            } else {
-                "the response carried neither b64_json nor url"
-            };
-            return Err(ProviderError::Malformed(hint.to_owned()));
-        };
-
-        let bytes = STANDARD.decode(encoded).map_err(|error| {
-            ProviderError::Malformed(format!("image was not valid base64: {error}"))
-        })?;
+        let bytes = decode_first_image(response).await?;
 
         let (width, height) = parse_size(&size);
 
@@ -147,6 +132,106 @@ impl MediaProvider for ImageProvider {
             "image generation is synchronous and has nothing to poll".to_owned(),
         ))
     }
+}
+
+impl ImageProvider {
+    /// Generates from a prompt *and* a reference image.
+    ///
+    /// `POST {endpoint}/openai/v1/images/edits`, multipart. The response
+    /// shape is the same as a plain generation, so the parsing is shared.
+    async fn edit(
+        &self,
+        prompt: &str,
+        correlation_id: &str,
+        reference: ReferenceImage,
+        size: &str,
+        quality: &str,
+    ) -> Result<ProviderJob, ProviderError> {
+        let headers = self.credentials.headers().await?;
+        let url = self.config.url("images/edits");
+
+        tracing::info!(
+            correlation_id,
+            deployment = %self.config.image_deployment,
+            size,
+            quality,
+            reference_bytes = reference.bytes.len(),
+            "submitting image edit from a reference"
+        );
+
+        let response = send_with_retry(
+            || {
+                // Rebuilt per attempt: a multipart body cannot be cloned, and
+                // send_with_retry may call this more than once.
+                let part = reqwest::multipart::Part::bytes(reference.bytes.clone())
+                    .file_name(reference.file_name.clone())
+                    .mime_str(&reference.content_type)
+                    .unwrap_or_else(|_| reqwest::multipart::Part::bytes(reference.bytes.clone()));
+
+                let form = reqwest::multipart::Form::new()
+                    .text("model", self.config.image_deployment.clone())
+                    .text("prompt", prompt.to_owned())
+                    .text("n", "1")
+                    .text("size", size.to_owned())
+                    .text("quality", quality.to_owned())
+                    .part("image", part);
+
+                self.http
+                    .post(&url)
+                    .headers(headers.clone())
+                    .multipart(form)
+            },
+            correlation_id,
+            "images/edits",
+        )
+        .await?;
+
+        let bytes = decode_first_image(response).await?;
+        let (width, height) = parse_size(size);
+
+        tracing::info!(correlation_id, bytes = bytes.len(), "image edited");
+
+        Ok(ProviderJob::immediate(GeneratedMedia {
+            bytes,
+            content_type: "image/png".to_owned(),
+            extension: "png",
+            width,
+            height,
+            duration_ms: None,
+        }))
+    }
+}
+
+/// Reads the first image out of an images response and decodes it.
+///
+/// Shared by generation and editing: both answer with the same shape.
+async fn decode_first_image(response: reqwest::Response) -> Result<Vec<u8>, ProviderError> {
+    let parsed: ImagesResponse = response
+        .json()
+        .await
+        .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+
+    let first = parsed
+        .data
+        .into_iter()
+        .next()
+        .ok_or_else(|| ProviderError::Malformed("no image in the response".to_owned()))?;
+
+    let Some(encoded) = first.b64_json else {
+        // A deployment configured to return URLs would need a second fetch
+        // before the bytes could be stored. Refusing loudly beats silently
+        // handing the browser a provider URL.
+        let hint = if first.url.is_some() {
+            "the deployment returned a URL; expected base64"
+        } else {
+            "the response carried neither b64_json nor url"
+        };
+        return Err(ProviderError::Malformed(hint.to_owned()));
+    };
+
+    STANDARD
+        .decode(encoded)
+        .map_err(|error| ProviderError::Malformed(format!("image was not valid base64: {error}")))
 }
 
 /// Reads a string parameter from the job's stored parameters.
