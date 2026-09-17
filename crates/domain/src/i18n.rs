@@ -135,6 +135,21 @@ pub mod nb {
     /// Ingress of the archive page.
     pub const PAGE_ARCHIVE_LEAD: &str = "Arkiv over generert innhold. Du kan velge mellom dine egne og alle, \
          sortere etter dato og filtrere på bilde, lyd og video.";
+    /// Headline when the session is missing or expired.
+    pub const ERROR_HEADING_SIGN_IN: &str = "Du må logge inn";
+    /// Headline when the user lacks the required app role.
+    pub const ERROR_HEADING_NO_ACCESS: &str = "Ingen tilgang";
+    /// Headline when nothing matched.
+    pub const ERROR_HEADING_NOT_FOUND: &str = "Fant ikke siden";
+    /// Headline when the user is rate limited.
+    pub const ERROR_HEADING_TOO_MUCH: &str = "Vent litt";
+    /// Headline for anything else.
+    pub const ERROR_HEADING_SOMETHING_WRONG: &str = "Noe gikk galt";
+    /// Offer to start the sign-in over.
+    pub const TRY_SIGN_IN_AGAIN: &str = "Prøv å logge inn på nytt";
+    /// Label in front of the correlation id on the error page.
+    pub const SUPPORT_REFERENCE: &str = "Oppgi denne referansen ved henvendelse:";
+
     /// Accessible label for the filter group.
     pub const FILTERS_LABEL: &str = "Filtrer og sorter";
     /// Label above the own/all toggle.

@@ -1,0 +1,56 @@
+{#
+  Error page for ordinary page navigations.
+
+  Standalone rather than extending base.html: an error can occur before there is
+  a signed-in user, and the top bar needs one. It carries its own minimal markup
+  and uses the same stylesheet, so it looks like the rest of the application
+  without depending on anything that might be missing.
+#}
+<!doctype html>
+<html lang="{{ nb::LANG }}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>{{ heading }} – {{ nb::APP_TITLE }}</title>
+    <link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/css/app.css" />
+  </head>
+  <body class="min-h-dvh bg-bg text-text antialiased">
+    <main class="mx-auto flex min-h-dvh w-full max-w-[560px] flex-col justify-center px-4 py-16">
+      <div class="rounded-panel border border-border bg-surface p-6 shadow-panel sm:p-8">
+        <p class="text-[11px] font-medium uppercase tracking-[0.18em] text-text-muted">
+          {{ nb::APP_TITLE }}
+        </p>
+        <h1 class="mt-3 text-[26px] font-semibold leading-tight text-text sm:text-[30px]">
+          {{ heading }}
+        </h1>
+        <p class="mt-3 text-[15px] leading-relaxed text-text-muted">{{ message }}</p>
+
+        <div class="mt-6 flex flex-wrap gap-2">
+          {% if show_retry %}
+          <a
+            href="/auth/login"
+            class="rounded-card bg-accent px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
+          >{{ nb::TRY_SIGN_IN_AGAIN }}</a>
+          {% endif %}
+          <a
+            href="/"
+            class="rounded-card border border-border bg-surface-2 px-5 py-2.5 text-sm text-text transition-colors hover:border-accent-hover"
+          >{{ nb::BACK_TO_GENERATOR }}</a>
+        </div>
+
+        {#
+          The correlation id is the one thing support actually needs, and the
+          user is the only one who can see it right now.
+        #}
+        {% if correlation_id != "" %}
+        <p class="mt-6 border-t border-border pt-4 text-xs text-text-muted">
+          {{ nb::SUPPORT_REFERENCE }}
+          <code class="select-all font-mono text-text">{{ correlation_id }}</code>
+        </p>
+        {% endif %}
+      </div>
+    </main>
+  </body>
+</html>

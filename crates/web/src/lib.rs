@@ -139,6 +139,10 @@ where
         .layer(option_layer(
             middleware::security_headers::strict_transport_security(environment),
         ))
+        // Outside the routes but inside the correlation span: it needs the
+        // correlation id, and it must see the error responses every handler
+        // and guard produces.
+        .layer(from_fn(middleware::error_page::render_html_errors))
         .layer(TraceLayer::new_for_http())
         .layer(SetSensitiveRequestHeadersLayer::new([
             header::AUTHORIZATION,
